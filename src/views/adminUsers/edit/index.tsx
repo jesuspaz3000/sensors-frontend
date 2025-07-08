@@ -29,7 +29,7 @@ interface EditUserDialogProps {
 }
 
 interface UserData {
-    id: number;
+    id: string;
     nombre: string;
     usuario: string;
     email: string;
@@ -38,7 +38,7 @@ interface UserData {
 
 export default function EditUserDialog({ open, onClose, onSave, userData }: EditUserDialogProps) {
     const [formData, setFormData] = useState<UserData>({
-        id: 0,
+        id: '',
         nombre: '',
         usuario: '',
         email: '',

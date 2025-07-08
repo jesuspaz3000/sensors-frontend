@@ -13,6 +13,7 @@ import {
     Button
 } from "@mui/material";
 import { Logout, Person, Dashboard, Menu as MenuIcon } from "@mui/icons-material";
+import { useAuth } from "../../hooks/useAuth";
 
 // Componente de enlace personalizado para móvil
 const MobileLink = ({ href, children, onClick }: { href: string; children: React.ReactNode; onClick: () => void }) => (
@@ -28,8 +29,14 @@ const MobileLink = ({ href, children, onClick }: { href: string; children: React
 export default function Navbar() {
     const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+    const { user, isAuthenticated, isAdmin, logout } = useAuth();
     const open = Boolean(anchorEl);
     const router = useRouter();
+
+    // Si no está autenticado, no mostrar el navbar
+    if (!isAuthenticated || !user) {
+        return null;
+    }
 
     const handleClick = (event: MouseEvent<HTMLElement>) => {
         setAnchorEl(event.currentTarget);
@@ -37,6 +44,11 @@ export default function Navbar() {
 
     const handleClose = () => {
         setAnchorEl(null);
+    };
+
+    const handleLogout = async () => {
+        handleClose();
+        await logout();
     };
 
     const handleProfileClick = () => {
@@ -60,7 +72,9 @@ export default function Navbar() {
     return (
         <div className="w-full h-16 px-4 md:px-16 py-6 fixed z-50 backdrop-blur-lg bg-black/20 shadow-xl border-b border-white/40">
             <div className="flex justify-between items-center w-full h-full">
-                <h1 className="text-white text-xl md:text-2xl font-bold hover:cursor-pointer drop-shadow-xl text-shadow-lg">Aire Limpio</h1>
+                <Link href="/home">
+                    <h1 className="text-white text-xl md:text-2xl font-bold hover:cursor-pointer drop-shadow-xl text-shadow-lg">Aire Limpio</h1>
+                </Link>
 
                 {/* Menú de escritorio */}
                 <div className="hidden lg:flex gap-16 text-white font-semibold">
@@ -131,7 +145,7 @@ export default function Navbar() {
                             <span style={{
                                 textShadow: '2px 2px 4px rgba(0, 0, 0, 0.8)',
                                 fontWeight: 600,
-                            }}>Admin</span>
+                            }}>{user.name || user.userName}</span>
                             <Avatar
                                 src="/images/perfil.jpeg"
                                 sx={{
@@ -201,7 +215,7 @@ export default function Navbar() {
                                         bgcolor: 'rgba(30, 64, 175, 0.9)',
                                     }}
                                 />
-                                <span>Admin</span>
+                                <span>{user.name || user.userName}</span>
                             </Button>
                         </div>
                     </div>
@@ -263,12 +277,15 @@ export default function Navbar() {
                 transformOrigin={{ horizontal: 'right', vertical: 'top' }}
                 anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
             >
-                <MenuItem onClick={handleAdminUsersClick}>
+                {/* Solo mostrar la opción de administrar usuarios si es Admin */}
+                {isAdmin && (
+                  <MenuItem onClick={handleAdminUsersClick}>
                     <ListItemIcon>
                         <Dashboard fontSize="small" />
                     </ListItemIcon>
                     Administrar Usuarios
-                </MenuItem>
+                  </MenuItem>
+                )}
                 <MenuItem onClick={handleProfileClick}>
                     <ListItemIcon>
                         <Person fontSize="small" />
@@ -276,7 +293,7 @@ export default function Navbar() {
                     Mi perfil
                 </MenuItem>
                 <Divider />
-                <MenuItem onClick={handleClose}>
+                <MenuItem onClick={handleLogout}>
                     <ListItemIcon>
                         <Logout fontSize="small" />
                     </ListItemIcon>

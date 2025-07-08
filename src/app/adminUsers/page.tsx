@@ -1,9 +1,10 @@
 import AdminUsers from "@/views/adminUsers";
+import ProtectedRoute from "@/components/ProtectedRoute";
 
 export default function Page() {
     return (
-        <div>
+        <ProtectedRoute adminOnly={true}>
             <AdminUsers />
-        </div>
+        </ProtectedRoute>
     );
 }

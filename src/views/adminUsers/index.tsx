@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
     Box,
     Button,
@@ -12,7 +12,9 @@ import {
     DialogActions,
     DialogContentText,
     IconButton,
-    Chip
+    Chip,
+    CircularProgress,
+    Alert
 } from '@mui/material';
 import { GridColDef, GridRenderCellParams } from '@mui/x-data-grid';
 import AddIcon from '@mui/icons-material/Add';
@@ -21,55 +23,21 @@ import PersonIcon from '@mui/icons-material/Person';
 import WarningIcon from '@mui/icons-material/Warning';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import DeleteIcon from '@mui/icons-material/Delete';
+// Imports temporalmente comentados hasta implementar CRUD completo
 import CreateUserDialog from './create';
 import EditUserDialog from './edit';
 import UsersTable, { getChipColor } from '@/components/table';
-
-// Datos de ejemplo para los usuarios
-const usersData = [
-    {
-        id: 1,
-        nombre: 'Juan Pérez',
-        usuario: 'juan.perez',
-        email: 'juan.perez@email.com',
-        rol: 'Administrador'
-    },
-    {
-        id: 2,
-        nombre: 'María García',
-        usuario: 'maria.garcia',
-        email: 'maria.garcia@email.com',
-        rol: 'Usuario'
-    },
-    {
-        id: 3,
-        nombre: 'Carlos López',
-        usuario: 'carlos.lopez',
-        email: 'carlos.lopez@email.com',
-        rol: 'Usuario'
-    },
-    {
-        id: 4,
-        nombre: 'Ana Martínez',
-        usuario: 'ana.martinez',
-        email: 'ana.martinez@email.com',
-        rol: 'Usuario'
-    },
-    {
-        id: 5,
-        nombre: 'Luis Rodríguez',
-        usuario: 'luis.rodriguez',
-        email: 'luis.rodriguez@email.com',
-        rol: 'Administrador'
-    }
-];
+import AdminUsersService, { User } from '@/services/adminUsers/adminUsers.service';
 
 interface UserData {
-    id: number;
+    id: string;
     nombre: string;
     usuario: string;
     email: string;
     rol: string;
+    emailConfirmed?: boolean;
+    createdAt?: string;
+    updatedAt?: string;
 }
 
 interface CreateUserData {
@@ -81,15 +49,67 @@ interface CreateUserData {
 }
 
 export default function AdminUsers() {
-    const [users, setUsers] = useState(usersData);
+    const [users, setUsers] = useState<UserData[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const [successMessage, setSuccessMessage] = useState<string | null>(null);
+    const [paginationModel, setPaginationModel] = useState({
+        page: 0,
+        pageSize: 10,
+    });
+    const [totalUsers, setTotalUsers] = useState(0);
+    // Estados temporalmente comentados hasta implementar CRUD completo
     const [createDialogOpen, setCreateDialogOpen] = useState(false);
     const [editDialogOpen, setEditDialogOpen] = useState(false);
     const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+    const [deleteLoading, setDeleteLoading] = useState(false);
     const [selectedUser, setSelectedUser] = useState<UserData | null>(null);
     const [userToDelete, setUserToDelete] = useState<UserData | null>(null);
 
+    // Cargar usuarios
+    const loadUsers = useCallback(async () => {
+        try {
+            setLoading(true);
+            setError(null);
+            
+            const response = await AdminUsersService.listUsers({
+                limit: paginationModel.pageSize,
+                offset: paginationModel.page * paginationModel.pageSize
+            });
+
+            // El servicio devuelve directamente la estructura de paginación
+            if (response && response.data && Array.isArray(response.data)) {
+                // Mapear datos del API a la estructura esperada por la tabla
+                const mappedUsers = response.data.map((user: User) => ({
+                    id: user.id,
+                    nombre: user.name,
+                    usuario: user.userName,
+                    email: user.email,
+                    rol: user.roles.join(', '), // Convertir array de roles a string
+                    emailConfirmed: user.emailConfirmed,
+                    createdAt: user.createdAt,
+                    updatedAt: user.updatedAt
+                }));
+                
+                setUsers(mappedUsers);
+                setTotalUsers(response.total);
+            } else {
+                setError('No se recibieron datos del servidor');
+            }
+        } catch (err) {
+            console.error('Error loading users:', err);
+            setError('Error al conectar con el servidor');
+        } finally {
+            setLoading(false);
+        }
+    }, [paginationModel.page, paginationModel.pageSize]);
+
+    // Cargar usuarios al montar el componente o cambiar paginación
+    useEffect(() => {
+        loadUsers();
+    }, [loadUsers]);
+
     const handleGoToHome = () => {
-        // Aquí puedes usar Next.js router o window.location para navegar
         window.location.href = '/home';
     };
 
@@ -97,15 +117,48 @@ export default function AdminUsers() {
         setCreateDialogOpen(true);
     };
 
-    const handleEditUser = (id: number) => {
-        const user = users.find(u => u.id === id);
-        if (user) {
-            setSelectedUser(user);
-            setEditDialogOpen(true);
+    const handleEditUser = async (id: string) => {
+        console.log('handleEditUser called with id:', id);
+        try {
+            setError(null);
+            const response = await AdminUsersService.getUserById(id);
+            
+            // Verificar si los datos están en response.data o directamente en response
+            const userData = response.data || response;
+            
+            // Type guard para verificar si es un objeto User
+            if (userData && typeof userData === 'object' && 'id' in userData && 'name' in userData) {
+                console.log('User data received, opening edit dialog...');
+                // Mapear los datos del API a la estructura esperada por el diálogo
+                const mappedUserData: UserData = {
+                    id: (userData as User).id,
+                    nombre: (userData as User).name,
+                    usuario: (userData as User).userName,
+                    email: (userData as User).email,
+                    rol: (userData as User).roles.includes('Admin') ? 'Administrador' : 'Usuario'
+                };
+                
+                setSelectedUser(mappedUserData);
+                setEditDialogOpen(true);
+            } else {
+                console.log('No valid user data received from API');
+            }
+        } catch (error: unknown) {
+            console.error('Error loading user:', error);
+            
+            let errorMessage = 'Error al cargar los datos del usuario.';
+            if (error instanceof Error) {
+                errorMessage = error.message;
+            } else if (typeof error === 'object' && error !== null && 'response' in error) {
+                const response = (error as { response?: { data?: { message?: string } } }).response;
+                errorMessage = response?.data?.message || errorMessage;
+            }
+            
+            setError(errorMessage);
         }
     };
 
-    const handleDeleteUser = (id: number) => {
+    const handleDeleteUser = (id: string) => {
         const user = users.find(u => u.id === id);
         if (user) {
             setUserToDelete(user);
@@ -113,46 +166,149 @@ export default function AdminUsers() {
         }
     };
 
-    const handleConfirmDelete = () => {
-        if (userToDelete) {
-            setUsers(prev => prev.filter(user => user.id !== userToDelete.id));
-            setDeleteDialogOpen(false);
-            setUserToDelete(null);
+    const handleSaveNewUser = async (userData: CreateUserData) => {
+        try {
+            setError(null);
+            setSuccessMessage(null);
+            
+            // Mapear los datos del formulario al formato esperado por el API
+            const createUserPayload = {
+                name: userData.nombre,
+                userName: userData.usuario,
+                email: userData.email,
+                password: userData.password,
+                roles: [userData.rol === 'Administrador' ? 'Admin' : 'User']
+            };
+
+            await AdminUsersService.createUser(createUserPayload);
+            setCreateDialogOpen(false);
+            
+            // Mostrar mensaje de éxito
+            setSuccessMessage(`Usuario "${userData.nombre}" creado exitosamente`);
+            
+            // Limpiar mensaje de éxito después de 5 segundos
+            setTimeout(() => {
+                setSuccessMessage(null);
+            }, 5000);
+            
+            // Recargar la lista después de crear
+            loadUsers();
+        } catch (error: unknown) {
+            console.error('Error creating user:', error);
+            
+            // Mostrar mensaje de error específico
+            let errorMessage = 'Error al crear el usuario. Por favor, intenta nuevamente.';
+            
+            if (error instanceof Error) {
+                errorMessage = error.message;
+            } else if (typeof error === 'object' && error !== null && 'response' in error) {
+                const response = (error as { response?: { data?: { message?: string } } }).response;
+                errorMessage = response?.data?.message || errorMessage;
+            }
+            
+            setError(errorMessage);
         }
-    };
-
-    const handleCancelDelete = () => {
-        setDeleteDialogOpen(false);
-        setUserToDelete(null);
-    };
-
-    const handleSaveNewUser = (userData: CreateUserData) => {
-        const newUser: UserData = {
-            id: Math.max(...users.map(u => u.id)) + 1,
-            nombre: userData.nombre,
-            usuario: userData.usuario,
-            email: userData.email,
-            rol: userData.rol
-        };
-        setUsers(prev => [...prev, newUser]);
-        setCreateDialogOpen(false);
-    };
-
-    const handleSaveEditUser = (userData: UserData) => {
-        setUsers(prev => prev.map(user =>
-            user.id === userData.id ? userData : user
-        ));
-        setEditDialogOpen(false);
-        setSelectedUser(null);
     };
 
     const handleCloseCreateDialog = () => {
         setCreateDialogOpen(false);
     };
 
+    const handleSaveEditUser = async (userData: UserData) => {
+        try {
+            setError(null);
+            setSuccessMessage(null);
+            
+            // Mapear los datos del formulario al formato esperado por el API
+            const updateUserPayload = {
+                name: userData.nombre,
+                userName: userData.usuario,
+                email: userData.email,
+                roles: [userData.rol === 'Administrador' ? 'Admin' : 'User']
+            };
+
+            await AdminUsersService.updateUser(userData.id, updateUserPayload);
+            setEditDialogOpen(false);
+            setSelectedUser(null);
+            
+            // Mostrar mensaje de éxito
+            setSuccessMessage(`Usuario "${userData.nombre}" actualizado exitosamente`);
+            
+            // Limpiar mensaje de éxito después de 5 segundos
+            setTimeout(() => {
+                setSuccessMessage(null);
+            }, 5000);
+            
+            // Recargar la lista después de editar
+            loadUsers();
+        } catch (error: unknown) {
+            console.error('Error updating user:', error);
+            
+            let errorMessage = 'Error al actualizar el usuario. Por favor, intenta nuevamente.';
+            if (error instanceof Error) {
+                errorMessage = error.message;
+            } else if (typeof error === 'object' && error !== null && 'response' in error) {
+                const response = (error as { response?: { data?: { message?: string } } }).response;
+                errorMessage = response?.data?.message || errorMessage;
+            }
+            
+            setError(errorMessage);
+        }
+    };
+
     const handleCloseEditDialog = () => {
         setEditDialogOpen(false);
         setSelectedUser(null);
+    };
+
+    const handleConfirmDelete = async () => {
+        if (userToDelete) {
+            try {
+                setError(null);
+                setSuccessMessage(null);
+                setDeleteLoading(true);
+                
+                console.log('Deleting user:', userToDelete.id);
+                await AdminUsersService.deleteUser(userToDelete.id);
+                
+                setDeleteDialogOpen(false);
+                setUserToDelete(null);
+                
+                // Mostrar mensaje de éxito
+                setSuccessMessage(`Usuario "${userToDelete.nombre}" eliminado exitosamente`);
+                
+                // Limpiar mensaje de éxito después de 5 segundos
+                setTimeout(() => {
+                    setSuccessMessage(null);
+                }, 5000);
+                
+                // Recargar la lista después de eliminar
+                loadUsers();
+            } catch (error: unknown) {
+                console.error('Error deleting user:', error);
+                
+                let errorMessage = 'Error al eliminar el usuario. Por favor, intenta nuevamente.';
+                if (error instanceof Error) {
+                    errorMessage = error.message;
+                } else if (typeof error === 'object' && error !== null && 'response' in error) {
+                    const response = (error as { response?: { data?: { message?: string } } }).response;
+                    errorMessage = response?.data?.message || errorMessage;
+                }
+                
+                setError(errorMessage);
+                setDeleteDialogOpen(false);
+                setUserToDelete(null);
+            } finally {
+                setDeleteLoading(false);
+            }
+        }
+    };
+
+    const handleCancelDelete = () => {
+        if (!deleteLoading) {
+            setDeleteDialogOpen(false);
+            setUserToDelete(null);
+        }
     };
 
     // Definición de columnas para la tabla
@@ -221,6 +377,29 @@ export default function AdminUsers() {
             ),
         },
     ];
+
+    // Si está cargando, mostrar loading
+    if (loading) {
+        return (
+            <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-900 py-4 sm:py-6 lg:py-8 pt-16 sm:pt-20">
+                <Container maxWidth="xl">
+                    <Box sx={{ 
+                        display: 'flex', 
+                        flexDirection: 'column',
+                        justifyContent: 'center', 
+                        alignItems: 'center', 
+                        height: '50vh',
+                        gap: 3
+                    }}>
+                        <CircularProgress size={60} sx={{ color: '#4ade80' }} />
+                        <Typography variant="h6" sx={{ color: 'white', textAlign: 'center' }}>
+                            Cargando usuarios...
+                        </Typography>
+                    </Box>
+                </Container>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-900 py-4 sm:py-6 lg:py-8 pt-16 sm:pt-20">
@@ -291,7 +470,7 @@ export default function AdminUsers() {
                             fontSize: { xs: '1rem', sm: '1.25rem' }
                         }}
                     >
-                        Gestiona los usuarios del sistema
+                        Gestiona los usuarios del sistema ({totalUsers} usuarios totales)
                     </Typography>
 
                     <Button
@@ -318,11 +497,69 @@ export default function AdminUsers() {
                     </Button>
                 </Box>
 
+                {/* Mostrar error si existe */}
+                {error && (
+                    <Alert 
+                        severity="error" 
+                        sx={{ 
+                            mb: 3,
+                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                            color: 'white',
+                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                            '& .MuiAlert-icon': {
+                                color: '#ef4444'
+                            }
+                        }}
+                        action={
+                            <Button 
+                                color="inherit" 
+                                size="small" 
+                                onClick={loadUsers}
+                                sx={{ 
+                                    color: 'white',
+                                    borderColor: 'rgba(255, 255, 255, 0.3)',
+                                    '&:hover': {
+                                        backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                                    }
+                                }}
+                            >
+                                Reintentar
+                            </Button>
+                        }
+                    >
+                        {error}
+                    </Alert>
+                )}
+
+                {/* Mostrar mensaje de éxito si existe */}
+                {successMessage && (
+                    <Alert 
+                        severity="success" 
+                        sx={{ 
+                            mb: 3,
+                            backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                            color: 'white',
+                            border: '1px solid rgba(34, 197, 94, 0.3)',
+                            '& .MuiAlert-icon': {
+                                color: '#22c55e'
+                            }
+                        }}
+                        onClose={() => setSuccessMessage(null)}
+                    >
+                        {successMessage}
+                    </Alert>
+                )}
+
                 <UsersTable 
                     users={users}
                     columns={columns}
                     onEditUser={handleEditUser}
                     onDeleteUser={handleDeleteUser}
+                    loading={false}
+                    paginationModel={paginationModel}
+                    onPaginationModelChange={setPaginationModel}
+                    rowCount={totalUsers}
+                    pageSizeOptions={[5, 10, 25, 50]}
                 />
             </Container>
 
@@ -343,7 +580,7 @@ export default function AdminUsers() {
             {/* Diálogo de confirmación para eliminar */}
             <Dialog
                 open={deleteDialogOpen}
-                onClose={handleCancelDelete}
+                onClose={deleteLoading ? () => {} : handleCancelDelete}
                 maxWidth="sm"
                 fullWidth
                 slotProps={{
@@ -390,12 +627,17 @@ export default function AdminUsers() {
                     <Button
                         onClick={handleCancelDelete}
                         variant="outlined"
+                        disabled={deleteLoading}
                         sx={{
                             color: 'white',
                             borderColor: 'rgba(255, 255, 255, 0.3)',
                             '&:hover': {
                                 backgroundColor: 'rgba(255, 255, 255, 0.1)',
                                 borderColor: 'rgba(255, 255, 255, 0.5)',
+                            },
+                            '&:disabled': {
+                                color: 'rgba(255, 255, 255, 0.5)',
+                                borderColor: 'rgba(255, 255, 255, 0.2)',
                             },
                         }}
                     >
@@ -404,15 +646,19 @@ export default function AdminUsers() {
                     <Button
                         onClick={handleConfirmDelete}
                         variant="contained"
-                        startIcon={<DeleteIcon />}
+                        startIcon={deleteLoading ? <CircularProgress size={16} sx={{ color: 'white' }} /> : <DeleteIcon />}
+                        disabled={deleteLoading}
                         sx={{
                             backgroundColor: '#ef4444',
                             '&:hover': {
                                 backgroundColor: '#dc2626',
                             },
+                            '&:disabled': {
+                                backgroundColor: 'rgba(239, 68, 68, 0.5)',
+                            },
                         }}
                     >
-                        Eliminar
+                        {deleteLoading ? 'Eliminando...' : 'Eliminar'}
                     </Button>
                 </DialogActions>
             </Dialog>

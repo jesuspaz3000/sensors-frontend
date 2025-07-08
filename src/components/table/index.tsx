@@ -18,33 +18,56 @@ import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 import PersonIcon from '@mui/icons-material/Person';
 
 interface UserData {
-    id: number;
+    id: string;
     nombre: string;
     usuario: string;
     email: string;
     rol: string;
+    emailConfirmed?: boolean;
+    createdAt?: string;
+    updatedAt?: string;
 }
 
 interface UsersTableProps {
     users: UserData[];
     columns: GridColDef[];
-    onEditUser: (id: number) => void;
-    onDeleteUser: (id: number) => void;
+    onEditUser?: (id: string) => void;
+    onDeleteUser?: (id: string) => void;
+    loading?: boolean;
+    paginationModel?: {
+        page: number;
+        pageSize: number;
+    };
+    onPaginationModelChange?: (model: { page: number; pageSize: number }) => void;
+    rowCount?: number;
+    pageSizeOptions?: number[];
 }
 
 // Función para obtener el color del chip según el rol (exportada para uso externo)
 export const getChipColor = (role: string) => {
     switch (role) {
         case 'Administrador':
+        case 'Admin':
             return 'error';
         case 'Usuario':
+        case 'User':
             return 'primary';
         default:
             return 'default';
     }
 };
 
-export default function UsersTable({ users, columns, onEditUser, onDeleteUser }: UsersTableProps) {
+export default function UsersTable({ 
+    users, 
+    columns, 
+    onEditUser, 
+    onDeleteUser, 
+    loading = false,
+    paginationModel,
+    onPaginationModelChange,
+    rowCount,
+    pageSizeOptions = [5, 10, 25]
+}: UsersTableProps) {
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
@@ -98,32 +121,36 @@ export default function UsersTable({ users, columns, onEditUser, onDeleteUser }:
                     </Box>
 
                     <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
-                        <IconButton
-                            onClick={() => onEditUser(user.id)}
-                            size="small"
-                            sx={{
-                                backgroundColor: 'rgba(74, 222, 128, 0.1)',
-                                border: '1px solid rgba(74, 222, 128, 0.3)',
-                                '&:hover': {
-                                    backgroundColor: 'rgba(74, 222, 128, 0.2)',
-                                },
-                            }}
-                        >
-                            <EditIcon fontSize="small" sx={{ color: '#4ade80' }} />
-                        </IconButton>
-                        <IconButton
-                            onClick={() => onDeleteUser(user.id)}
-                            size="small"
-                            sx={{
-                                backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                                border: '1px solid rgba(239, 68, 68, 0.3)',
-                                '&:hover': {
-                                    backgroundColor: 'rgba(239, 68, 68, 0.2)',
-                                },
-                            }}
-                        >
-                            <DeleteIcon fontSize="small" sx={{ color: '#ef4444' }} />
-                        </IconButton>
+                        {onEditUser && (
+                            <IconButton
+                                onClick={() => onEditUser(user.id)}
+                                size="small"
+                                sx={{
+                                    backgroundColor: 'rgba(74, 222, 128, 0.1)',
+                                    border: '1px solid rgba(74, 222, 128, 0.3)',
+                                    '&:hover': {
+                                        backgroundColor: 'rgba(74, 222, 128, 0.2)',
+                                    },
+                                }}
+                            >
+                                <EditIcon fontSize="small" sx={{ color: '#4ade80' }} />
+                            </IconButton>
+                        )}
+                        {onDeleteUser && (
+                            <IconButton
+                                onClick={() => onDeleteUser(user.id)}
+                                size="small"
+                                sx={{
+                                    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                                    '&:hover': {
+                                        backgroundColor: 'rgba(239, 68, 68, 0.2)',
+                                    },
+                                }}
+                            >
+                                <DeleteIcon fontSize="small" sx={{ color: '#ef4444' }} />
+                            </IconButton>
+                        )}
                     </Box>
                 </CardContent>
             </Card>
@@ -152,12 +179,12 @@ export default function UsersTable({ users, columns, onEditUser, onDeleteUser }:
                     <DataGrid
                         rows={users}
                         columns={columns}
-                        initialState={{
-                            pagination: {
-                                paginationModel: { page: 0, pageSize: 10 },
-                            },
-                        }}
-                        pageSizeOptions={[5, 10, 25]}
+                        loading={loading}
+                        paginationMode="server"
+                        paginationModel={paginationModel}
+                        onPaginationModelChange={onPaginationModelChange}
+                        rowCount={rowCount}
+                        pageSizeOptions={pageSizeOptions}
                         disableRowSelectionOnClick
                         sx={{
                             border: 'none',

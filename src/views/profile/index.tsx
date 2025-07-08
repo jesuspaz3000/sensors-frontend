@@ -1,26 +1,79 @@
 'use client';
 
 import Navbar from '@/components/navbar';
-import { useState, ChangeEvent, FormEvent } from 'react';
+import RevalidationConfigPanel from '@/components/RevalidationConfigPanel';
+import { useState, ChangeEvent, FormEvent, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { TextField, Button, Box, Typography, Container } from '@mui/material';
+import { TextField, Button, Box, Typography, Container, Alert, CircularProgress } from '@mui/material';
 import PersonIcon from '@mui/icons-material/Person';
 import EmailIcon from '@mui/icons-material/Email';
 import LockIcon from '@mui/icons-material/Lock';
 import SaveIcon from '@mui/icons-material/Save';
 import CancelIcon from '@mui/icons-material/Cancel';
+import { ProfileService, UpdateProfileData } from '../../services/profile/profile.service';
+import { AuthService } from '../../services/login/auth.service';
+import { debugApiConfig } from '../../services/api.service';
 
 export default function Profile() {
     const [formData, setFormData] = useState({
-        nombre: '',
-        usuario: '',
+        name: '',
+        userName: '',
         email: '',
         currentPassword: '',
         newPassword: '',
-        confirmPassword: ''
+        confirmNewPassword: ''
     });
+    
+    const [loading, setLoading] = useState(false);
+    const [loadingData, setLoadingData] = useState(true);
+    const [error, setError] = useState('');
+    const [success, setSuccess] = useState('');
+    const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
     const router = useRouter();
+
+    // Cargar datos del usuario al montar el componente
+    useEffect(() => {
+        loadUserData();
+    }, []);
+
+    const loadUserData = async () => {
+        try {
+            setLoadingData(true);
+            
+            // Obtener datos del usuario desde localStorage (inmediato)
+            const response = await ProfileService.getProfile();
+            if (response.success && response.data) {
+                setFormData(prev => ({
+                    ...prev,
+                    name: response.data?.name || '',
+                    userName: response.data?.userName || '',
+                    email: response.data?.email || ''
+                }));
+            } else {
+                // Si no hay datos en localStorage, intentar desde la API
+                try {
+                    const apiResponse = await ProfileService.getProfileFromAPI();
+                    if (apiResponse.success && apiResponse.data) {
+                        setFormData(prev => ({
+                            ...prev,
+                            name: apiResponse.data?.name || '',
+                            userName: apiResponse.data?.userName || '',
+                            email: apiResponse.data?.email || ''
+                        }));
+                    }
+                } catch (apiError) {
+                    console.error('Error loading from API:', apiError);
+                    setError('Error al cargar los datos del usuario');
+                }
+            }
+        } catch (error) {
+            console.error('Error loading user data:', error);
+            setError('Error al cargar los datos del usuario');
+        } finally {
+            setLoadingData(false);
+        }
+    };
 
     const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
         const { name, value } = e.target;
@@ -28,12 +81,146 @@ export default function Profile() {
             ...prev,
             [name]: value
         }));
+        
+        // Limpiar errores cuando el usuario empiece a escribir
+        if (error) setError('');
+        if (success) setSuccess('');
+        if (fieldErrors[name]) {
+            setFieldErrors(prev => ({
+                ...prev,
+                [name]: ''
+            }));
+        }
     };
 
-    const handleSubmit = (e: FormEvent) => {
+    const handleSubmit = async (e: FormEvent) => {
         e.preventDefault();
-        // Aquí iría la lógica para guardar los cambios
-        console.log('Datos a guardar:', formData);
+        
+        // Debug de configuración y autenticación
+        await debugApiConfig();
+        
+        setLoading(true);
+        setError('');
+        setSuccess('');
+        setFieldErrors({});
+
+        try {
+            // Preparar datos para enviar
+            const updateData: UpdateProfileData = {
+                name: formData.name,
+                userName: formData.userName,
+                email: formData.email,
+                currentPassword: formData.currentPassword // Siempre incluir contraseña actual
+            };
+
+            // Determinar si se está intentando cambiar la contraseña
+            const isChangingPassword = ProfileService.isPasswordChangeAttempt({
+                name: formData.name,
+                userName: formData.userName,
+                email: formData.email,
+                newPassword: formData.newPassword,
+                confirmNewPassword: formData.confirmNewPassword
+            });
+
+            // Solo incluir campos de nueva contraseña si realmente se está cambiando
+            if (isChangingPassword) {
+                updateData.newPassword = formData.newPassword;
+                updateData.confirmNewPassword = formData.confirmNewPassword;
+                console.log('Actualizando perfil con cambio de contraseña');
+            } else {
+                console.log('Actualizando perfil sin cambio de contraseña');
+            }
+
+            const response = await ProfileService.updateProfile(updateData);
+
+            if (response.success) {
+                setSuccess('¡Perfil actualizado exitosamente!');
+                
+                // Actualizar datos del usuario en localStorage si se actualizó
+                if (response.data?.user) {
+                    AuthService.saveUser(response.data.user);
+                }
+                
+                // Limpiar campos de contraseña
+                setFormData(prev => ({
+                    ...prev,
+                    currentPassword: '',
+                    newPassword: '',
+                    confirmNewPassword: ''
+                }));
+
+                // Opcional: Limpiar mensaje de éxito después de un tiempo
+                setTimeout(() => {
+                    setSuccess('');
+                }, 3000);
+            } else {
+                setError(response.message || 'Error al actualizar el perfil');
+            }
+        } catch (error: unknown) {
+            console.error('Profile update error:', error);
+            
+            // Manejo mejorado de errores
+            if (error && typeof error === 'object') {
+                // Error de autenticación
+                if ('status' in error && error.status === 401) {
+                    setError('Sesión expirada. Por favor, inicia sesión nuevamente.');
+                    // Opcional: redirigir al login después de un momento
+                    setTimeout(() => {
+                        router.push('/login');
+                    }, 2000);
+                    return;
+                }
+                
+                // Error de la API con datos estructurados
+                if ('data' in error) {
+                    const apiError = error as { data?: { errors?: Record<string, string[]>; message?: string }; status?: number; message?: string };
+                    if (apiError.data?.errors) {
+                        // Errores de validación del servidor
+                        const serverErrors = apiError.data.errors;
+                        const newFieldErrors: Record<string, string> = {};
+                        Object.entries(serverErrors).forEach(([field, messages]) => {
+                            newFieldErrors[field.toLowerCase()] = messages[0];
+                        });
+                        setFieldErrors(newFieldErrors);
+                        setError('Por favor, corrige los errores en el formulario');
+                    } else if (apiError.data?.message) {
+                        setError(apiError.data.message);
+                    } else if (apiError.message) {
+                        setError(apiError.message);
+                    } else {
+                        setError('Error al actualizar el perfil');
+                    }
+                }
+                // Error con response (formato axios/fetch)
+                else if ('response' in error) {
+                    const responseError = error as { response?: { data?: { message?: string; errors?: Record<string, string[]> } } };
+                    if (responseError?.response?.data?.errors) {
+                        const serverErrors = responseError.response.data.errors;
+                        const newFieldErrors: Record<string, string> = {};
+                        Object.entries(serverErrors).forEach(([field, messages]) => {
+                            newFieldErrors[field.toLowerCase()] = messages[0];
+                        });
+                        setFieldErrors(newFieldErrors);
+                        setError('Por favor, corrige los errores en el formulario');
+                    } else if (responseError?.response?.data?.message) {
+                        setError(responseError.response.data.message);
+                    } else {
+                        setError('Error al actualizar el perfil');
+                    }
+                }
+                // Error instance
+                else if (error instanceof Error) {
+                    setError(error.message);
+                }
+                else {
+                    setError('Error al actualizar el perfil');
+                }
+            } else {
+                setError('Error de conexión. Verifica tu internet e intenta nuevamente.');
+            }
+        } finally {
+            setLoading(false);
+        }
     };
 
     const handleCancel = () => {
@@ -77,6 +264,26 @@ export default function Profile() {
                             </Typography>
                         </Box>
 
+                        {/* Mostrar loading mientras se cargan los datos */}
+                        {loadingData && (
+                            <Box className="flex justify-center mb-6">
+                                <CircularProgress sx={{ color: '#4ade80' }} />
+                            </Box>
+                        )}
+
+                        {/* Mensajes de éxito y error */}
+                        {success && (
+                            <Alert severity="success" sx={{ mb: 3, backgroundColor: 'rgba(76, 175, 80, 0.1)', color: 'white' }}>
+                                {success}
+                            </Alert>
+                        )}
+                        
+                        {error && (
+                            <Alert severity="error" sx={{ mb: 3, backgroundColor: 'rgba(244, 67, 54, 0.1)', color: 'white' }}>
+                                {error}
+                            </Alert>
+                        )}
+
                         <Box component="form" onSubmit={handleSubmit} noValidate autoComplete="off" sx={{ spaceY: { xs: 4, sm: 6 } }}>
                             {/* Información Personal */}
                             <Box className="space-y-4">
@@ -99,12 +306,15 @@ export default function Profile() {
                                 <Box className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <TextField
                                         fullWidth
-                                        name="nombre"
+                                        name="name"
                                         label="Nombre Completo"
-                                        value={formData.nombre}
+                                        value={formData.name}
                                         onChange={handleInputChange}
                                         variant="outlined"
-                                        autoComplete="off"
+                                        autoComplete="name"
+                                        error={!!fieldErrors.name}
+                                        helperText={fieldErrors.name}
+                                        disabled={loading || loadingData}
                                         sx={{
                                             '& .MuiOutlinedInput-root': {
                                                 backgroundColor: 'rgba(255, 255, 255, 0.1)',
@@ -132,12 +342,15 @@ export default function Profile() {
                                     
                                     <TextField
                                         fullWidth
-                                        name="usuario"
+                                        name="userName"
                                         label="Nombre de Usuario"
-                                        value={formData.usuario}
+                                        value={formData.userName}
                                         onChange={handleInputChange}
                                         variant="outlined"
-                                        autoComplete="off"
+                                        autoComplete="username"
+                                        error={!!fieldErrors.userName}
+                                        helperText={fieldErrors.userName}
+                                        disabled={loading || loadingData}
                                         sx={{
                                             '& .MuiOutlinedInput-root': {
                                                 backgroundColor: 'rgba(255, 255, 255, 0.1)',
@@ -172,7 +385,10 @@ export default function Profile() {
                                     value={formData.email}
                                     onChange={handleInputChange}
                                     variant="outlined"
-                                    autoComplete="off"
+                                    autoComplete="email"
+                                    error={!!fieldErrors.email}
+                                    helperText={fieldErrors.email}
+                                    disabled={loading || loadingData}
                                     slotProps={{
                                         input: {
                                             startAdornment: <EmailIcon className="text-gray-400 mr-2" />,
@@ -233,6 +449,25 @@ export default function Profile() {
                                     />
                                     Cambiar Contraseña
                                 </Typography>
+
+                                {/* Indicador de comportamiento */}
+                                <Alert 
+                                    severity="info" 
+                                    sx={{ 
+                                        marginBottom: 2,
+                                        backgroundColor: 'rgba(33, 150, 243, 0.1)',
+                                        color: 'rgba(255, 255, 255, 0.9)',
+                                        '& .MuiAlert-icon': {
+                                            color: '#4ade80'
+                                        }
+                                    }}
+                                >
+                                    <Typography variant="body2">
+                                        <strong>Contraseña actual:</strong> Siempre requerida para actualizar el perfil.<br/>
+                                        <strong>Nueva contraseña:</strong> Solo completa estos campos si deseas cambiar tu contraseña. 
+                                        Debe contener al menos 6 caracteres, letras y números.
+                                    </Typography>
+                                </Alert>
                                 
                                 <TextField
                                     fullWidth
@@ -242,7 +477,10 @@ export default function Profile() {
                                     value={formData.currentPassword}
                                     onChange={handleInputChange}
                                     variant="outlined"
-                                    autoComplete="new-password"
+                                    autoComplete="current-password"
+                                    error={!!fieldErrors.currentPassword}
+                                    helperText={fieldErrors.currentPassword}
+                                    disabled={loading || loadingData}
                                     sx={{
                                         marginBottom: 2,
                                         '& .MuiOutlinedInput-root': {
@@ -279,6 +517,9 @@ export default function Profile() {
                                         onChange={handleInputChange}
                                         variant="outlined"
                                         autoComplete="new-password"
+                                        error={!!fieldErrors.newPassword}
+                                        helperText={fieldErrors.newPassword}
+                                        disabled={loading || loadingData}
                                         sx={{
                                             '& .MuiOutlinedInput-root': {
                                                 backgroundColor: 'rgba(255, 255, 255, 0.1)',
@@ -306,13 +547,16 @@ export default function Profile() {
                                     
                                     <TextField
                                         fullWidth
-                                        name="confirmPassword"
+                                        name="confirmNewPassword"
                                         label="Confirmar Contraseña"
                                         type="password"
-                                        value={formData.confirmPassword}
+                                        value={formData.confirmNewPassword}
                                         onChange={handleInputChange}
                                         variant="outlined"
                                         autoComplete="new-password"
+                                        error={!!fieldErrors.confirmNewPassword}
+                                        helperText={fieldErrors.confirmNewPassword}
+                                        disabled={loading || loadingData}
                                         sx={{
                                             '& .MuiOutlinedInput-root': {
                                                 backgroundColor: 'rgba(255, 255, 255, 0.1)',
@@ -365,11 +609,15 @@ export default function Profile() {
                                 <Button
                                     type="submit"
                                     variant="contained"
-                                    startIcon={<SaveIcon />}
+                                    startIcon={loading ? <CircularProgress size={16} sx={{ color: 'white' }} /> : <SaveIcon />}
+                                    disabled={loading || loadingData}
                                     sx={{
                                         backgroundColor: '#10b981',
                                         '&:hover': {
                                             backgroundColor: '#059669',
+                                        },
+                                        '&:disabled': {
+                                            backgroundColor: 'rgba(16, 185, 129, 0.5)',
                                         },
                                         px: { xs: 2, sm: 3 },
                                         py: 1.5,
@@ -377,13 +625,15 @@ export default function Profile() {
                                         width: { xs: '100%', sm: 'auto' }
                                     }}
                                 >
-                                    Guardar Cambios
+                                    {loading ? 'Guardando...' : 'Guardar Cambios'}
                                 </Button>
                             </Box>
                         </Box>
                     </Box>
                 </Container>
             </div>
+            {/* Panel de configuración de revalidación (solo en development) */}
+            {process.env.NODE_ENV === 'development' && <RevalidationConfigPanel />}
         </div>
     );
 }

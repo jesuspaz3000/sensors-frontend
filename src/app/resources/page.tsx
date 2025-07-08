@@ -1,9 +1,10 @@
 import Resources from "@/views/resources";
+import ProtectedRoute from "@/components/ProtectedRoute";
 
 export default function ResourcesPage() {
     return (
-        <div>
+        <ProtectedRoute>
             <Resources />
-        </div>
+        </ProtectedRoute>
     );
 }
