@@ -186,14 +186,7 @@ export class GraphicsSectionService {
 
       const endpoint = `sensordata${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
       
-      console.log(`🔍 [getSensorData] Llamando endpoint: ${endpoint}`);
-      console.log(`🔍 [getSensorData] Parámetros enviados:`, params);
-      
       const response = await api.secureGet<SensorDataResponse>(endpoint);
-      
-      console.log(`🔍 [getSensorData] Respuesta cruda:`, response);
-      console.log(`🔍 [getSensorData] Datos en response.data:`, (response as unknown as SensorDataResponse).data);
-      console.log(`🔍 [getSensorData] Cantidad de lecturas:`, (response as unknown as SensorDataResponse).data?.length || 0);
       
       // El backend devuelve directamente el objeto, no envuelto en ApiResponse
       return response as unknown as SensorDataResponse;
@@ -214,9 +207,7 @@ export class GraphicsSectionService {
         throw new Error('Punto is required');
       }
       
-      console.log(`🔍 [getAllSensorData] Obteniendo todos los datos para: ${punto}`);
       const response = await api.secureGet<{ punto: string; totalRecords: number; data: SensorReading[]; timestamp: string }>(`sensordata/all/${encodeURIComponent(punto)}`);
-      console.log(`🔍 [getAllSensorData] Respuesta de /all:`, response);
       
       return response;
     } catch (error) {
@@ -244,8 +235,6 @@ export class GraphicsSectionService {
    */
   static async getAvailablePoints(): Promise<string[]> {
     try {
-      console.log('🔍 [getAvailablePoints] Iniciando llamada a sensordata/points...');
-      
       // Primero hacer health check para ver el estado del sistema
       try {
         const healthResponse = await api.get('sensordata/health');
@@ -255,9 +244,6 @@ export class GraphicsSectionService {
       }
       
       const response = await api.secureGet<string[]>('sensordata/points');
-      console.log('🔍 [getAvailablePoints] Respuesta cruda recibida:', response);
-      console.log('🔍 [getAvailablePoints] response.data:', (response as ApiResponse<string[]>).data);
-      console.log('🔍 [getAvailablePoints] Tipo de response.data:', typeof (response as ApiResponse<string[]>).data);
       
       // El backend devuelve directamente el array, no envuelto en ApiResponse
       if (Array.isArray(response)) {
@@ -514,7 +500,6 @@ export class GraphicsSectionService {
    */
   static async startRealtimeConnection(callbacks: SignalRCallbacks): Promise<void> {
     try {
-      console.log('🚀 [GraphicsService] Iniciando conexión SignalR...');
       signalRService.setCallbacks(callbacks);
       await signalRService.start();
     } catch (error) {
@@ -528,7 +513,6 @@ export class GraphicsSectionService {
    */
   static async stopRealtimeConnection(): Promise<void> {
     try {
-      console.log('🛑 [GraphicsService] Deteniendo conexión SignalR...');
       await signalRService.stop();
     } catch (error) {
       console.error('Error stopping SignalR connection:', error);
@@ -542,7 +526,6 @@ export class GraphicsSectionService {
    */
   static async subscribeToRealtimeData(punto: string): Promise<void> {
     try {
-      console.log(`📡 [GraphicsService] Suscribiéndose a datos en tiempo real de: ${punto}`);
       await signalRService.subscribeToPoint(punto);
     } catch (error) {
       console.error(`Error subscribing to realtime data for ${punto}:`, error);
@@ -556,7 +539,6 @@ export class GraphicsSectionService {
    */
   static async unsubscribeFromRealtimeData(punto: string): Promise<void> {
     try {
-      console.log(`📡 [GraphicsService] Desuscribiéndose de datos en tiempo real de: ${punto}`);
       await signalRService.unsubscribeFromPoint(punto);
     } catch (error) {
       console.error(`Error unsubscribing from realtime data for ${punto}:`, error);
@@ -588,7 +570,6 @@ export class GraphicsSectionService {
     try {
       const subscriptions = puntos.map(punto => this.subscribeToRealtimeData(punto));
       await Promise.all(subscriptions);
-      console.log(`✅ [GraphicsService] Suscrito a ${puntos.length} puntos:`, puntos);
     } catch (error) {
       console.error('Error subscribing to multiple points:', error);
       throw error;
@@ -603,7 +584,6 @@ export class GraphicsSectionService {
     try {
       const unsubscriptions = puntos.map(punto => this.unsubscribeFromRealtimeData(punto));
       await Promise.all(unsubscriptions);
-      console.log(`✅ [GraphicsService] Desuscrito de ${puntos.length} puntos:`, puntos);
     } catch (error) {
       console.error('Error unsubscribing from multiple points:', error);
       throw error;

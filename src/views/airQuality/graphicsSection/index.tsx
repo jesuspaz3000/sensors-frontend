@@ -165,7 +165,6 @@ export default function GraphicsSection() {
 
     // Función para manejar alertas críticas recibidas por SignalR
     const handleCriticalAlertReceived = useCallback((alertData: CriticalAlertSignal) => {
-        console.log('🚨 [UI] Alerta crítica recibida:', alertData);
         
         // Mostrar notificación visual prominente
         const criticalParams = alertData.CriticalValues
@@ -199,7 +198,6 @@ export default function GraphicsSection() {
 
     // Función para manejar confirmaciones de email enviado
     const handleEmailSentReceived = useCallback((emailData: EmailSentSignal) => {
-        console.log('📧 [UI] Confirmación de email recibida:', emailData);
         
         // Agregar a la lista de notificaciones de email
         const emailNotification = {
@@ -223,13 +221,6 @@ export default function GraphicsSection() {
                 autoHide: false // Cambiar a false para que sea más visible
             });
             
-            console.log('📧 [UI] Snackbar de email configurado:', {
-                open: true,
-                type: 'email',
-                message: `📧 ¡Email de alerta enviado exitosamente! Destinatario: ${emailData.UserEmail || emailData.EmailSentTo || 'usuario'}`,
-                punto: emailData.Punto || 'Sistema',
-                autoHide: false
-            });
         }, 1500); // Delay de 1.5 segundos para asegurar visibilidad
         
         // Refrescar estado de alertas para mostrar la información del email
@@ -245,18 +236,15 @@ export default function GraphicsSection() {
     // pero necesitamos conectar los manejadores locales con los eventos recibidos
     useEffect(() => {
         if (isConnected) {
-            console.log('🚨 [UI] Conexión SignalR establecida para alertas críticas');
             
             // Las funciones handleCriticalAlertReceived y handleEmailSentReceived están listas
             // para ser utilizadas cuando el hook useRealtimeSensorData las necesite
-            console.log('📡 [UI] Handlers de alertas preparados para SignalR');
         }
     }, [isConnected]);
 
     // Cargar estado de alertas cuando cambien los puntos disponibles
     useEffect(() => {
         if (availablePoints.length > 0 && dataMode === 'realtime') {
-            console.log('🚨 [UI] Cargando estado de alertas para puntos:', availablePoints);
             availablePoints.forEach(punto => {
                 getAlertStatusForPoint(punto);
             });
@@ -280,8 +268,6 @@ export default function GraphicsSection() {
                 
                 // Solo logging ocasional para debugging sin spam
                 if (Math.random() < 0.1) { // Solo 10% de las veces
-                    console.log(`🔍 [${punto}] hasRealData: ${hasRealData}, dataSource: ${dataSourceType}, isPaused: ${isPaused}`);
-                    console.log(`📊 [${punto}] realtimeDataLength: ${realtimeData[punto]?.length || 0}, staticDataLength: ${staticSensorData[punto]?.length || 0}, frozenDataLength: ${frozenData[punto]?.length || 0}`);
                     
                     // Información adicional para datos en tiempo real
                     if (dataSourceType === 'realtime' && realtimeData[punto]?.length) {
@@ -397,7 +383,6 @@ export default function GraphicsSection() {
         try {
             switch (action) {
                 case 'start':
-                    console.log(`🔴 [RealTime] Iniciando/Reanudando monitoreo en tiempo real para: ${punto}`);
                     
                     // Quitar de pausa local
                     setPausedGraphs(prev => ({ ...prev, [punto]: false }));
@@ -405,11 +390,9 @@ export default function GraphicsSection() {
                     // Iniciar monitoreo real en el backend
                     await startRealTimeMonitoring(punto);
                     
-                    console.log(`✅ [RealTime] Gráfica reanudada para: ${punto}`);
                     break;
                     
                 case 'pause':
-                    console.log(`⏸️ [RealTime] Pausando gráfica para: ${punto} (datos siguen llegando en segundo plano)`);
                     
                     // Congelar datos actuales
                     const currentData = realtimeData[punto] || [];
@@ -421,8 +404,6 @@ export default function GraphicsSection() {
                     // NO detener el monitoreo en el backend - los datos siguen llegando
                     // await stopRealTimeMonitoring(punto); // <-- Comentado para que sigan llegando datos
                     
-                    console.log(`❄️ [RealTime] Gráfica congelada para: ${punto} con ${currentData.length} registros`);
-                    console.log(`📡 [RealTime] Backend sigue enviando datos para: ${punto}`);
                     break;
             }
         } catch (error) {
@@ -469,7 +450,6 @@ export default function GraphicsSection() {
         try {
             setSwitchingMode(true);
             await switchToRealData(punto);
-            console.log(`✅ Cambiado a datos reales para ${punto}`);
         } catch (error) {
             console.error(`❌ Error switching to real data for ${punto}:`, error);
         } finally {
@@ -481,7 +461,6 @@ export default function GraphicsSection() {
         try {
             setSwitchingMode(true);
             await switchToSimulatedData(punto);
-            console.log(`✅ Cambiado a datos simulados para ${punto}`);
         } catch (error) {
             console.error(`❌ Error switching to simulated data for ${punto}:`, error);
         } finally {
@@ -493,7 +472,6 @@ export default function GraphicsSection() {
         try {
             setSwitchingMode(true);
             await loadFullStaticData(punto);
-            console.log(`✅ Cargados datos estáticos completos para ${punto}`);
         } catch (error) {
             console.error(`❌ Error loading full static data for ${punto}:`, error);
         } finally {
@@ -505,11 +483,9 @@ export default function GraphicsSection() {
     useEffect(() => {
         const loadInitialData = async () => {
             try {
-                console.log('🔄 Iniciando carga de datos de sensores...');
 
                 // Obtener puntos disponibles
                 const points = await GraphicsSectionService.getAvailablePoints();
-                console.log('📍 Puntos disponibles:', points);
                 setAvailablePoints(points);
 
                 if (points.length === 0) {
@@ -541,7 +517,6 @@ export default function GraphicsSection() {
             if (dataMode === 'static') {
                 const missingPoints = availablePoints.filter(punto => !staticSensorData[punto]);
                 if (missingPoints.length > 0) {
-                    console.log('🔧 Faltan datos para puntos:', missingPoints);
                     // Crear datos por defecto para puntos faltantes
                     const updatedData = { ...staticSensorData };
                     const updatedStatus = { ...staticDataStatus };
@@ -584,7 +559,6 @@ export default function GraphicsSection() {
                                 timestamp: new Date()
                             }
                         }));
-                        console.log(`🔄 [UI] Notificación: Archivo reseteado para ${punto}`);
                     }
                 } else if (state.sensorStatus.includes('detuvo crecimiento') || state.sensorStatus.includes('Sin datos nuevos')) {
                     if (!currentNotification || currentNotification.type !== 'stopped') {
@@ -596,7 +570,6 @@ export default function GraphicsSection() {
                                 timestamp: new Date()
                             }
                         }));
-                        console.log(`⏸️ [UI] Notificación: Archivo detenido para ${punto}`);
                     }
                 } else if (state.isMonitoring && (state.sensorStatus.includes('tiempo real') || state.sensorStatus.includes('Recibiendo datos'))) {
                     if (!currentNotification || currentNotification.type !== 'active') {
@@ -608,7 +581,6 @@ export default function GraphicsSection() {
                                 timestamp: new Date()
                             }
                         }));
-                        console.log(`✅ [UI] Notificación: Datos activos para ${punto}`);
                     }
                 }
             }
@@ -620,8 +592,6 @@ export default function GraphicsSection() {
         try {
             const dataPromises = points.map(async (punto) => {
                 try {
-                    console.log(`📊 Cargando datos estáticos para ${punto}...`);
-
                     const dataResponse = await GraphicsSectionService.getSensorData({
                         punto,
                         limit: 100
@@ -685,11 +655,9 @@ export default function GraphicsSection() {
         const newMode = dataMode === 'static' ? 'realtime' : 'static';
 
         setSwitchingMode(true);
-        console.log(`🔄 Iniciando cambio de modo: ${dataMode} → ${newMode}`);
 
         try {
             if (newMode === 'realtime') {
-                console.log('🔄 Cambiando a modo tiempo real...');
                 
                 // Conectar ANTES de cambiar el modo para evitar efectos no deseados
                 await connect();
@@ -697,12 +665,8 @@ export default function GraphicsSection() {
                 // Cambiar modo después de conectar exitosamente
                 setDataMode(newMode);
 
-                // NO cargar datos históricos - empezar con datos vacíos para simulación gradual
-                console.log('📊 Modo tiempo real: iniciando con datos vacíos para simulación gradual...');
-                console.log('✅ Modo tiempo real activado correctamente');
                 
             } else {
-                console.log('🔄 Cambiando a modo histórico...');
                 
                 // Desconectar ANTES de cambiar el modo
                 await disconnect();
@@ -710,14 +674,12 @@ export default function GraphicsSection() {
                 // Cambiar modo después de desconectar exitosamente
                 setDataMode(newMode);
                 
-                console.log('✅ Modo histórico activado correctamente');
             }
         } catch (error) {
             console.error('❌ Error en toggleDataMode:', error);
             
             // En caso de error, revertir cualquier cambio
             if (newMode === 'realtime') {
-                console.log('❌ Error conectando - revirtiendo a modo estático');
                 setDataMode('static');
                 // Asegurar desconexión en caso de error
                 try {
@@ -726,7 +688,6 @@ export default function GraphicsSection() {
                     console.error('❌ Error adicional al desconectar:', disconnectError);
                 }
             } else {
-                console.log('❌ Error desconectando - revirtiendo a modo tiempo real');
                 setDataMode('realtime');
                 // Intentar reconectar si falló la desconexión
                 try {
@@ -737,7 +698,6 @@ export default function GraphicsSection() {
             }
         } finally {
             setSwitchingMode(false);
-            console.log(`✅ Proceso de cambio de modo completado. Modo actual: ${dataMode}`);
         }
     };
 
@@ -759,7 +719,6 @@ export default function GraphicsSection() {
                 }
             } else {
                 // Modo estático: NO PERMITIR simulación, solo cambiar a tiempo real
-                console.log('🔄 Para simulación gradual, cambia a modo "Tiempo Real"');
                 alert('Para simulación gradual (datos uno por uno), cambia a modo "Tiempo Real" usando el interruptor de arriba.');
             }
         } catch (error) {
@@ -772,10 +731,8 @@ export default function GraphicsSection() {
         setLoading(true);
         try {
             if (dataMode === 'static') {
-                console.log('🔄 Refrescando datos estáticos para todos los puntos:', availablePoints);
                 await loadStaticData(availablePoints);
             } else {
-                console.log('🔄 Modo tiempo real: asegurando que todos los puntos estén disponibles');
                 // En modo tiempo real, no refrescamos datos históricos
                 // Pero nos aseguramos de que todos los puntos estén representados
                 if (availablePoints.length > 0) {
