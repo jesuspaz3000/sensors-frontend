@@ -810,6 +810,13 @@ export default function GraphicsSection() {
         const tempData = getChartData(selectedPoint, 'temperatura');
         const co2Data = getChartData(selectedPoint, 'cO3');
         const pm25Data = getChartData(selectedPoint, 'pM2_5');
+        
+        // Umbrales críticos definidos en el sistema
+        const criticalThresholds = {
+            temperatura: 35, // °C
+            cO3: 0.1, // ppm 
+            pM2_5: 50 // μg/m³
+        };
 
         return (
             <div className="min-h-screen bg-gradient-to-b from-green-700 via-teal-600 to-teal-700 text-white p-4 sm:p-6 lg:p-8">
@@ -1286,9 +1293,10 @@ export default function GraphicsSection() {
                                     <GraphicsComponent
                                         title="Temperatura"
                                         unit="°C"
-                                        color="#ff6b6b"
+                                        color="#ff8c42"
                                         label="Temperatura"
                                         data={tempData}
+                                        criticalThreshold={criticalThresholds.temperatura}
                                     />
                                 </Box>
                             </CardContent>
@@ -1311,6 +1319,7 @@ export default function GraphicsSection() {
                                         color="#4ecdc4"
                                         label="CO2"
                                         data={co2Data}
+                                        criticalThreshold={criticalThresholds.cO3}
                                     />
                                 </Box>
                             </CardContent>
@@ -1333,6 +1342,7 @@ export default function GraphicsSection() {
                                         color="#ffe66d"
                                         label="PM2.5"
                                         data={pm25Data}
+                                        criticalThreshold={criticalThresholds.pM2_5}
                                     />
                                 </Box>
                             </CardContent>

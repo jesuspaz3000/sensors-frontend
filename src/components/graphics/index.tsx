@@ -14,6 +14,7 @@ interface GraphicsComponentProps {
     color: string;
     label: string;
     data: ChartData;
+    criticalThreshold?: number;
 }
 
 export default function GraphicsComponent({ 
@@ -21,7 +22,8 @@ export default function GraphicsComponent({
     unit, 
     color, 
     label, 
-    data 
+    data,
+    criticalThreshold
 }: GraphicsComponentProps) {
     return (
         <Card sx={{ 
@@ -65,11 +67,19 @@ export default function GraphicsComponent({
                             labelStyle: { fill: 'white', fontSize: 12 },
                             tickLabelStyle: { fill: 'white', fontSize: 10 }
                         }]}
-                        series={[{
-                            data: data.series,
-                            color: color,
-                            label: label
-                        }]}
+                        series={[
+                            {
+                                data: data.series,
+                                color: color,
+                                label: label
+                            },
+                            ...(criticalThreshold !== undefined ? [{
+                                data: Array(data.xAxis.length).fill(criticalThreshold),
+                                color: '#ff4444',
+                                label: `⚠️ Umbral Crítico (${criticalThreshold} ${unit})`,
+                                curve: 'linear' as const
+                            }] : [])
+                        ]}
                         sx={{
                             width: '100%',
                             height: '100%',
@@ -85,6 +95,16 @@ export default function GraphicsComponent({
                             '& .MuiChartsLegend-series text': {
                                 fill: 'white !important',
                                 fontSize: '12px'
+                            },
+                            // Aplicar estilo punteado a la segunda línea (umbral crítico)
+                            '& .MuiLineChart-path:nth-of-type(2)': {
+                                strokeDasharray: '8 4',
+                                strokeWidth: '3px'
+                            },
+                            // Alternativa: aplicar a todas las líneas con color específico
+                            '& path[stroke="#ff4444"]': {
+                                strokeDasharray: '8 4',
+                                strokeWidth: '3px'
                             }
                         }}
                     />
