@@ -7,11 +7,13 @@ import {
   SimulationState,
   SimulationStateType
 } from '../services/airQuality/graphicsSection.service';
+import { SensorIngestService } from '../services/sensorIngest';
 import * as signalR from '@microsoft/signalr';
-import { 
+import type { 
   CriticalAlertNotification, 
-  EmailSentNotification 
-} from '../services/signalr/signalr.service';
+  EmailSentNotification,
+  NewReadingMessage
+} from '../types/signalr';
 
 // Tipos de fuente de datos
 export type DataSourceType = 'simulated' | 'realtime' | 'historical';
@@ -71,6 +73,9 @@ export interface UseRealtimeSensorDataReturn {
   loadHistoricalData: (punto: string, params?: { fromDate?: string; toDate?: string; limit?: number }) => Promise<void>;
   loadFullStaticData: (punto: string) => Promise<void>; // Nueva función para cargar datos estáticos completos
   
+  // Acciones para datos de sensoringest (nuevo endpoint)
+  loadSensorIngestData: (punto: string, count?: number) => Promise<void>;
+  
   // Utilidades
   clearData: (punto?: string) => void;
   refreshStaticData: () => Promise<void>;
@@ -105,14 +110,71 @@ export const useRealtimeSensorData = ({
   const isConnected = connectionState === signalR.HubConnectionState.Connected;
 
   // Callback para manejar nuevos datos de sensores
-  const handleSensorDataReceived = useCallback((data: RealtimeSensorData) => {
-    const { latestReading, status } = data;
+  // Soporta dos formatos:
+  // 1. Formato antiguo: { latestReading, status }
+  // 2. Formato nuevo del backend: { data: [...], punto, lastUpdate, totalRecords, isRealTime }
+  const handleSensorDataReceived = useCallback((data: RealtimeSensorData | Record<string, unknown>) => {
+    // Detectar formato de datos
+    const dataObj = data as Record<string, unknown>;
+    
+    // Si tiene 'data' como array, es el formato nuevo del backend
+    if ('data' in dataObj && Array.isArray(dataObj.data)) {
+      // Formato nuevo: { data: [...], punto, lastUpdate, totalRecords, isRealTime }
+      const allReadings = dataObj.data as SensorReading[];
+      const punto = (dataObj.punto as string) || allReadings[0]?.punto;
+      const isRealTime = dataObj.isRealTime as boolean;
+      
+      if (!punto || allReadings.length === 0) {
+        console.warn('⚠️ Datos recibidos sin punto o vacíos:', dataObj);
+        return;
+      }
+      
+      // IMPORTANTE: Solo tomar los últimos 50 registros para las gráficas
+      const readings = allReadings.slice(-50);
+      
+      // Obtener la última lectura
+      const latestReading = readings[readings.length - 1];
+      
+      // Actualizar últimas lecturas
+      setLatestReadings(prev => ({
+        ...prev,
+        [punto]: latestReading
+      }));
+      
+      // Reemplazar con los últimos 50 datos recibidos (sliding window)
+      // El backend ya envía los datos ordenados, solo mantener los últimos 50
+      setRealtimeData(prev => ({ ...prev, [punto]: readings.slice(-50) }));
+      
+      // Actualizar estado
+      setRealDataState(prev => ({
+        ...prev,
+        [punto]: {
+          ...prev[punto],
+          isAvailable: true,
+          isMonitoring: isRealTime,
+          lastUpdate: new Date(),
+          sensorStatus: isRealTime ? 'Recibiendo datos en tiempo real' : 'Datos históricos'
+        }
+      }));
+      
+      setDataSource(prev => ({ ...prev, [punto]: 'realtime' }));
+      setSimulationStatus(prev => ({ ...prev, [punto]: false }));
+      
+      return;
+    }
+    
+    // Formato antiguo: { latestReading, status }
+    const { latestReading, status } = data as RealtimeSensorData;
+    
+    if (!latestReading) {
+      console.warn('⚠️ Datos recibidos sin latestReading:', data);
+      return;
+    }
+    
     const punto = latestReading.punto;
     
     // DETECTAR DATOS DE ARCHIVO RESETEADO
     if (status === 'real-time-reset') {
-      
-      // Actualizar estado para mostrar que estamos recibiendo datos reseteados
       setRealDataState(prev => ({
         ...prev,
         [punto]: {
@@ -133,13 +195,13 @@ export const useRealtimeSensorData = ({
     
     // Agregar a datos en tiempo real
     setRealtimeData(prev => {
-      const currentData = prev[punto] || [];
+      const rawData = prev[punto];
+      const currentData = Array.isArray(rawData) ? rawData : [];
       
       // Si es un reset, empezar con datos limpios
       let baseData = currentData;
       if (status === 'real-time-reset') {
-        // Para datos reseteados, empezar con gráfica completamente limpia
-        baseData = []; // LIMPIAR TODOS LOS DATOS ANTERIORES
+        baseData = [];
       }
       
       // Verificar si ya existe este timestamp para evitar duplicados
@@ -147,28 +209,20 @@ export const useRealtimeSensorData = ({
       
       let newData;
       if (existingIndex >= 0) {
-        // Si existe, reemplazar el dato existente
         newData = [...baseData];
         newData[existingIndex] = latestReading;
       } else {
-        // Si no existe, agregar al final
         newData = [...baseData, latestReading];
       }
       
-      // Solo aplicar límite para simulaciones, no para datos reales históricos + tiempo real
+      // Aplicar límite
       const currentDataSource = dataSource[punto];
       let trimmedData;
       
       if (currentDataSource === 'realtime' || status === 'real-time-reset') {
-        // Para datos reales o reseteados, mantener MUCHOS MÁS datos (históricos + nuevos)
-        const maxRealtimeData = maxDataPoints * 5; // Permitir 5x más datos para tiempo real
+        const maxRealtimeData = maxDataPoints * 5;
         trimmedData = newData.length > maxRealtimeData ? newData.slice(-maxRealtimeData) : newData;
-        
-        if (newData.length > maxRealtimeData) {
-          console.log(`⚠️ [useRealtimeSensorData] Datos limitados para ${punto}: ${newData.length} → ${trimmedData.length} (máximo: ${maxRealtimeData})`);
-        }
       } else {
-        // Para simulación, mantener el límite normal
         trimmedData = newData.slice(-maxDataPoints);
       }
       
@@ -178,14 +232,13 @@ export const useRealtimeSensorData = ({
       };
     });
     
-    // Actualizar estado de simulación si viene en los datos
+    // Actualizar estado de simulación
     if (status) {
       setSimulationStatus(prev => ({
         ...prev,
         [punto]: status === 'simulating'
       }));
       
-      // Si recibimos datos reales después de estar detenido, quitar estado de "detenido"
       if (status === 'real-time' || status === 'real-time-reset') {
         setRealDataState(prev => ({
           ...prev,
@@ -208,11 +261,12 @@ export const useRealtimeSensorData = ({
   }, []);
 
   // Callback para cambios de estado de conexión
-  const handleConnectionStateChanged = useCallback((state: signalR.HubConnectionState) => {
-    setConnectionState(state);
-    isConnectedRef.current = state === signalR.HubConnectionState.Connected;
+  const handleConnectionStateChanged = useCallback((state: string) => {
+    const hubState = state as unknown as signalR.HubConnectionState;
+    setConnectionState(hubState);
+    isConnectedRef.current = state === 'Connected';
     
-    if (state === signalR.HubConnectionState.Connected) {
+    if (state === 'Connected') {
       setError(null);
     }
   }, []);
@@ -236,6 +290,74 @@ export const useRealtimeSensorData = ({
       onEmailSent(emailData);
     }
   }, [onEmailSent]);
+
+  // ========================
+  // CALLBACK PARA NUEVO EVENTO ReceiveNewReading (endpoint /api/sensoringest)
+  // ========================
+  const handleNewReadingReceived = useCallback((message: NewReadingMessage) => {
+    const reading = message.data;
+    const punto = reading.punto;
+    
+    // Convertir al formato SensorReading
+    const newReading: SensorReading = {
+      timestamp: reading.timestamp,
+      temperatura: reading.temperatura,
+      humedad: reading.humedad,
+      pM2_5: reading.pM2_5,
+      cO3: reading.cO3,
+      punto: reading.punto,
+    };
+    
+    // Actualizar últimas lecturas
+    setLatestReadings(prev => ({
+      ...prev,
+      [punto]: newReading
+    }));
+    
+    // Agregar a datos en tiempo real
+    setRealtimeData(prev => {
+      const rawData = prev[punto];
+      // Asegurar que currentData sea siempre un array válido
+      const currentData = Array.isArray(rawData) ? rawData : [];
+      
+      // Verificar si ya existe este timestamp para evitar duplicados
+      const existingIndex = currentData.findIndex(item => item.timestamp === newReading.timestamp);
+      
+      let newData;
+      if (existingIndex >= 0) {
+        // Si existe, reemplazar el dato existente
+        newData = [...currentData];
+        newData[existingIndex] = newReading;
+      } else {
+        // Si no existe, agregar al final
+        newData = [...currentData, newReading];
+      }
+      
+      // Mantener ventana deslizante de 50 datos
+      const trimmedData = newData.length > 50 ? newData.slice(-50) : newData;
+      
+      return {
+        ...prev,
+        [punto]: trimmedData
+      };
+    });
+    
+    // Actualizar estado de datos reales
+    setRealDataState(prev => ({
+      ...prev,
+      [punto]: {
+        ...prev[punto],
+        isAvailable: true,
+        isMonitoring: true,
+        lastUpdate: new Date(),
+        sensorStatus: 'Recibiendo datos en tiempo real (sensoringest)'
+      }
+    }));
+    
+    // Marcar como datos en tiempo real
+    setDataSource(prev => ({ ...prev, [punto]: 'realtime' }));
+    
+  }, []);
 
   // NUEVOS CALLBACKS PARA DETECCIÓN MEJORADA DE CAMBIOS
   // ========================
@@ -282,13 +404,14 @@ export const useRealtimeSensorData = ({
         return; // Salir temprano para evitar intentar cargar datos
       }
       
-      // Recargar datos reales del backend - sin límite para obtener todos los datos
+      // Recargar datos reales del backend - usar sensoringest para obtener los últimos 50
       try {
-        const response = await GraphicsSectionService.getRealData(punto, { limit: 10000 }); // Límite muy alto para obtener todos los datos
-        const newRealData = response.data || [];
+        const newRealData = await SensorIngestService.getRecentData(punto, 50);
         
-        // Actualizar datos en tiempo real
-        setRealtimeData(prev => ({ ...prev, [punto]: newRealData }));
+        // Reemplazar con los últimos 50 datos (sliding window)
+        if (newRealData.length > 0) {
+          setRealtimeData(prev => ({ ...prev, [punto]: newRealData }));
+        }
         
         // Actualizar última lectura
         if (newRealData.length > 0) {
@@ -382,24 +505,8 @@ export const useRealtimeSensorData = ({
   }, []);
 
   // Callback para cambios en archivos de datos reales
-  const handleRealDataFileChanged = useCallback((notification: {
-    Punto: string;
-    ChangeType: 'file_modified' | 'file_deleted' | 'file_created';
-    Timestamp: string;
-    Message: string;
-  }) => {
-    
-    const { Punto: punto, ChangeType: changeType } = notification;
-    
-    // Mostrar información al usuario sobre el cambio
-    if (changeType === 'file_modified') {
-      console.log(`🔄 [useRealtimeSensorData] Archivo de ${punto} modificado - datos actualizados automáticamente`);
-    } else if (changeType === 'file_deleted') {
-      console.log(`🗑️ [useRealtimeSensorData] Archivo de ${punto} eliminado - cambiando a simulación`);
-    } else if (changeType === 'file_created') {
-      console.log(`✨ [useRealtimeSensorData] Nuevo archivo de datos reales para ${punto}`);
-    }
-    
+  const handleRealDataFileChanged = useCallback(() => {
+    // Aquí se puede notificar al usuario si es necesario
   }, []);
 
   // NUEVOS CALLBACKS PARA DETECCIÓN MEJORADA DE CAMBIOS
@@ -473,7 +580,6 @@ export const useRealtimeSensorData = ({
 
   // Callback para errores
   const handleError = useCallback((error: Error) => {
-    console.error('❌ [useRealtimeSensorData] Error:', error);
     setError(error.message);
   }, []);
 
@@ -483,7 +589,6 @@ export const useRealtimeSensorData = ({
 
   const checkRealDataAvailability = useCallback(async (punto: string): Promise<boolean> => {
     try {
-      
       const response = await GraphicsSectionService.checkRealDataAvailability(punto);
       
       // Intentar extraer los datos de diferentes lugares en la respuesta
@@ -504,17 +609,6 @@ export const useRealtimeSensorData = ({
         }
         if ('hasData' in responseObj) {
           hasData = Boolean(responseObj.hasData);
-        }
-        
-        // Si no encontramos en response principal, buscar en response.data
-        if (!fileExists && response.data && typeof response.data === 'object') {
-          const dataObj = response.data as unknown as Record<string, unknown>;
-          if ('exists' in dataObj) {
-            fileExists = Boolean(dataObj.exists);
-          }
-          if ('hasData' in dataObj) {
-            hasData = Boolean(dataObj.hasData);
-          }
         }
       }
       
@@ -538,16 +632,21 @@ export const useRealtimeSensorData = ({
         }
       }));
       
-      // Establecer fuente de datos apropiada
-      setDataSource(prev => ({ 
-        ...prev, 
-        [punto]: isAvailable ? 'historical' : 'simulated' 
-      }));
+      // Establecer fuente de datos apropiada SOLO si no está ya en 'realtime'
+      // Esto evita sobrescribir datos cargados por loadSensorIngestData
+      setDataSource(prev => {
+        // Si ya está en 'realtime', no cambiar
+        if (prev[punto] === 'realtime') {
+          return prev;
+        }
+        return { 
+          ...prev, 
+          [punto]: isAvailable ? 'historical' : 'simulated' 
+        };
+      });
       
       return isAvailable;
-    } catch (error) {
-      console.error(`❌ [useRealtimeSensorData] Error checking real data availability for ${punto}:`, error);
-      
+    } catch {
       // En caso de error, asumir que no hay datos reales disponibles
       setRealDataState(prev => ({
         ...prev,
@@ -559,7 +658,13 @@ export const useRealtimeSensorData = ({
         }
       }));
       
-      setDataSource(prev => ({ ...prev, [punto]: 'simulated' }));
+      // Solo cambiar a 'simulated' si no está ya en 'realtime'
+      setDataSource(prev => {
+        if (prev[punto] === 'realtime') {
+          return prev;
+        }
+        return { ...prev, [punto]: 'simulated' };
+      });
 
       return false;
     }
@@ -589,26 +694,22 @@ export const useRealtimeSensorData = ({
         onRealDataFileStop: handleRealDataFileStop,
         // NUEVOS CALLBACKS PARA ALERTAS CRÍTICAS
         onCriticalAlertNotification: handleCriticalAlertNotification,
-        onEmailSentNotification: handleEmailSentNotification
+        onEmailSentNotification: handleEmailSentNotification,
+        // NUEVO CALLBACK PARA DATOS EN TIEMPO REAL DEL ENDPOINT /api/sensoringest
+        onNewReadingReceived: handleNewReadingReceived
       });
       
       // Suscribirse a todos los puntos
       await GraphicsSectionService.subscribeToMultiplePoints(puntosRef.current);
       
       for (const punto of puntosRef.current) {
-        try {
-          const isAvailable = await checkRealDataAvailability(punto);
-          console.log(`📊 [useRealtimeSensorData] Post-conexión - ${punto}: Datos reales ${isAvailable ? 'DISPONIBLES' : 'NO DISPONIBLES'}`);
-        } catch (error) {
-          console.error(`❌ [useRealtimeSensorData] Error verificando ${punto} tras conexión:`, error);
-        }
+        await checkRealDataAvailability(punto);
       }
       
     } catch (error) {
-      console.error('❌ [useRealtimeSensorData] Error al conectar:', error);
       setError(error instanceof Error ? error.message : 'Error desconocido');
     }
-  }, [handleSensorDataReceived, handleSimulationStatusChanged, handleConnectionStateChanged, handleError, checkRealDataAvailability, handleRealDataCacheUpdated, handleRealDataStatusChanged, handleRealDataFileChanged, handleRealDataFileReset, handleRealDataFileStop, handleCriticalAlertNotification, handleEmailSentNotification]);
+  }, [handleSensorDataReceived, handleSimulationStatusChanged, handleConnectionStateChanged, handleError, checkRealDataAvailability, handleRealDataCacheUpdated, handleRealDataStatusChanged, handleRealDataFileChanged, handleRealDataFileReset, handleRealDataFileStop, handleCriticalAlertNotification, handleEmailSentNotification, handleNewReadingReceived]);
 
   // Función para desconectar
   const disconnect = useCallback(async () => {
@@ -620,9 +721,8 @@ export const useRealtimeSensorData = ({
       
       // Detener conexión
       await GraphicsSectionService.stopRealtimeConnection();
-      
     } catch (error) {
-      console.error('❌ [useRealtimeSensorData] Error al desconectar:', error);
+      setError(error instanceof Error ? error.message : 'Error al desconectar');
     }
   }, []);
 
@@ -640,7 +740,6 @@ export const useRealtimeSensorData = ({
         await GraphicsSectionService.startSimulation(punto);
       }
     } catch (error) {
-      console.error(`❌ [useRealtimeSensorData] Error al alternar simulación para ${punto}:`, error);
       setError(error instanceof Error ? error.message : 'Error al alternar simulación');
     }
   }, [simulationStatus]);
@@ -661,9 +760,8 @@ export const useRealtimeSensorData = ({
   // Función para refrescar datos estáticos (históricos)
   const refreshStaticData = useCallback(async () => {
     try {
-      
       const staticData = await GraphicsSectionService.getMultiplePointsData(puntosRef.current, {
-        limit: 100 // Obtener últimos 100 registros históricos
+        limit: 100
       });
       
       // Reemplazar datos en tiempo real con datos estáticos
@@ -678,7 +776,6 @@ export const useRealtimeSensorData = ({
       });
       setLatestReadings(newLatestReadings);
     } catch (error) {
-      console.error('❌ [useRealtimeSensorData] Error al refrescar datos estáticos:', error);
       setError(error instanceof Error ? error.message : 'Error al refrescar datos');
     }
   }, []);
@@ -713,9 +810,7 @@ export const useRealtimeSensorData = ({
       await GraphicsSectionService.startSimulation(punto);
       setSimulationStatus(prev => ({ ...prev, [punto]: true }));
       setSimulationState(prev => ({ ...prev, [punto]: SimulationState.RUNNING }));
-      
-    } catch (error) {
-      console.error('Error starting simulation:', error);
+    } catch {
       setError(`Error al iniciar simulación para ${punto}`);
     }
   };
@@ -725,8 +820,7 @@ export const useRealtimeSensorData = ({
       setError(null);
       await GraphicsSectionService.pauseSimulation(punto);
       setSimulationState(prev => ({ ...prev, [punto]: SimulationState.PAUSED }));
-    } catch (error) {
-      console.error('Error pausing simulation:', error);
+    } catch {
       setError(`Error al pausar simulación para ${punto}`);
     }
   };
@@ -736,8 +830,7 @@ export const useRealtimeSensorData = ({
       setError(null);
       await GraphicsSectionService.resumeSimulation(punto);
       setSimulationState(prev => ({ ...prev, [punto]: SimulationState.RUNNING }));
-    } catch (error) {
-      console.error('Error resuming simulation:', error);
+    } catch {
       setError(`Error al reanudar simulación para ${punto}`);
     }
   };
@@ -753,9 +846,7 @@ export const useRealtimeSensorData = ({
       setSimulationStatus(prev => ({ ...prev, [punto]: true }));
       setSimulationState(prev => ({ ...prev, [punto]: SimulationState.RUNNING }));
       setSimulationProgress(prev => ({ ...prev, [punto]: 0 }));
-      
-    } catch (error) {
-      console.error('Error restarting simulation:', error);
+    } catch {
       setError(`Error al reiniciar simulación para ${punto}`);
     }
   };
@@ -768,9 +859,7 @@ export const useRealtimeSensorData = ({
       setSimulationStatus(prev => ({ ...prev, [punto]: false }));
       setSimulationState(prev => ({ ...prev, [punto]: SimulationState.STOPPED }));
       setSimulationProgress(prev => ({ ...prev, [punto]: 0 }));
-
-    } catch (error) {
-      console.error('Error stopping simulation:', error);
+    } catch {
       setError(`Error al detener simulación para ${punto}`);
     }
   };
@@ -800,11 +889,9 @@ export const useRealtimeSensorData = ({
         }));
         
       } else {
-        console.warn(`⚠️ [useRealtimeSensorData] No se encontraron datos estáticos para: ${punto}`);
+        // No se encontraron datos
       }
-      
-    } catch (error) {
-      console.error(`❌ [useRealtimeSensorData] Error cargando datos estáticos completos para ${punto}:`, error);
+    } catch {
       setError(`Error al cargar datos completos para ${punto}`);
     }
   };
@@ -812,9 +899,8 @@ export const useRealtimeSensorData = ({
   const getSimulationStatus = async (punto: string): Promise<SimulationStatus | null> => {
     try {
       const response = await GraphicsSectionService.getSimulationStatus(punto);
-      return response?.data || null;
-    } catch (error) {
-      console.error('Error getting simulation status:', error);
+      return response || null;
+    } catch {
       return null;
     }
   };
@@ -846,9 +932,7 @@ export const useRealtimeSensorData = ({
       }));
       
       setDataSource(prev => ({ ...prev, [punto]: 'realtime' }));
-      
-    } catch (error) {
-      console.error(`Error starting real-time monitoring for ${punto}:`, error);
+    } catch {
       setError(`Error al iniciar monitoreo en tiempo real para ${punto}`);
     }
   };
@@ -869,9 +953,7 @@ export const useRealtimeSensorData = ({
       }));
       
       setDataSource(prev => ({ ...prev, [punto]: 'historical' }));
-      
-    } catch (error) {
-      console.error(`Error stopping real-time monitoring for ${punto}:`, error);
+    } catch {
       setError(`Error al detener monitoreo en tiempo real para ${punto}`);
     }
   };
@@ -889,31 +971,8 @@ export const useRealtimeSensorData = ({
       const isAvailable = await checkRealDataAvailability(punto);
       
       if (isAvailable) {
-        // VERIFICAR: ¿Cuántos datos reales hay disponibles en total?
-        const allRealDataResponse = await GraphicsSectionService.getRealData(punto, {
-          limit: 10000 // Límite alto para obtener todos los datos disponibles
-        });
-        const totalRealAvailable = allRealDataResponse.data?.length || 0;
-        
-        // PRIMERO: Cargar TODOS los datos REALES históricos disponibles
-        const historicalRealDataResponse = await GraphicsSectionService.getRealData(punto, {
-          limit: 10000 // Aumentado para obtener todos los datos reales históricos
-        });
-        
-        const historicalRealData = historicalRealDataResponse.data || [];
-        
-        if (historicalRealData.length < totalRealAvailable) {
-          console.log(`⚠️ [useRealtimeSensorData] ADVERTENCIA: Solo se cargaron ${historicalRealData.length} de ${totalRealAvailable} datos REALES disponibles`);
-          console.log(`💡 [useRealtimeSensorData] Para ver todos los datos reales, aumenta el límite en la configuración`);
-        }
-        
-        if (historicalRealData.length > 0) {
-          const firstRecord = historicalRealData[0];
-          const lastRecord = historicalRealData[historicalRealData.length - 1];
-          console.log(`📊 [useRealtimeSensorData] - Rango temporal REAL: ${firstRecord.timestamp} → ${lastRecord.timestamp}`);
-          console.log(`📊 [useRealtimeSensorData] - Primer registro REAL:`, firstRecord);
-          console.log(`📊 [useRealtimeSensorData] - Último registro REAL:`, lastRecord);
-        }
+        // Usar sensoringest para obtener los últimos 50 datos
+        const historicalRealData = await SensorIngestService.getRecentData(punto, 50);
         
         // Establecer datos reales históricos como base
         setRealtimeData(prev => ({ ...prev, [punto]: historicalRealData }));
@@ -929,10 +988,8 @@ export const useRealtimeSensorData = ({
         // Fallback a datos históricos si no hay datos reales
         await loadHistoricalData(punto, { limit: maxDataPoints });
         setDataSource(prev => ({ ...prev, [punto]: 'historical' }));
-        
       }
-    } catch (error) {
-      console.error(`Error switching to real data for ${punto}:`, error);
+    } catch {
       setError(`Error al cambiar a datos reales para ${punto}`);
     }
   };
@@ -941,20 +998,15 @@ export const useRealtimeSensorData = ({
     try {
       setError(null);
       
-      // Detener monitoreo en tiempo real si está activo
       const realState = realDataState[punto];
       if (realState?.isMonitoring) {
         await stopRealTimeMonitoring(punto);
       }
       
-      // Limpiar datos reales
       setRealtimeData(prev => ({ ...prev, [punto]: [] }));
       setLatestReadings(prev => ({ ...prev, [punto]: null }));
-      
       setDataSource(prev => ({ ...prev, [punto]: 'simulated' }));
-      
-    } catch (error) {
-      console.error(`Error switching to simulated data for ${punto}:`, error);
+    } catch {
       setError(`Error al cambiar a datos simulados para ${punto}`);
     }
   };
@@ -964,7 +1016,7 @@ export const useRealtimeSensorData = ({
       setError(null);
       
       const response = await GraphicsSectionService.getHistoricalData(punto, params);
-      const historicalData = response.data || [];
+      const historicalData = response || [];
       
       setRealtimeData(prev => ({ ...prev, [punto]: historicalData }));
       
@@ -973,10 +1025,59 @@ export const useRealtimeSensorData = ({
       }
       
       setDataSource(prev => ({ ...prev, [punto]: 'historical' }));
-      
-    } catch (error) {
-      console.error(`Error loading historical data for ${punto}:`, error);
+    } catch {
       setError(`Error al cargar datos históricos para ${punto}`);
+    }
+  };
+
+  // ========================
+  // NUEVA FUNCIÓN: Cargar datos del endpoint /api/sensoringest/recent/{punto}
+  // ========================
+  const loadSensorIngestData = async (punto: string, count: number = 50): Promise<void> => {
+    try {
+      setError(null);
+      
+      // Cargar datos históricos del nuevo endpoint sensoringest
+      const sensorIngestData = await SensorIngestService.getRecentData(punto, count);
+      
+      if (sensorIngestData && sensorIngestData.length > 0) {
+        // Reemplazar con los últimos 50 datos (sliding window)
+        // El endpoint ya devuelve los últimos N registros ordenados
+        setRealtimeData(prev => ({ ...prev, [punto]: sensorIngestData }));
+        
+        // Actualizar última lectura
+        setLatestReadings(prev => ({ 
+          ...prev, 
+          [punto]: sensorIngestData[sensorIngestData.length - 1] 
+        }));
+        
+        // Actualizar estado de datos reales
+        setRealDataState(prev => ({
+          ...prev,
+          [punto]: {
+            ...prev[punto],
+            isAvailable: true,
+            isMonitoring: true,
+            lastUpdate: new Date(),
+            sensorStatus: `Datos cargados de sensoringest (${sensorIngestData.length} registros)`
+          }
+        }));
+        
+        // Marcar como datos en tiempo real
+        setDataSource(prev => ({ ...prev, [punto]: 'realtime' }));
+      } else {
+        // No hay datos disponibles
+        setRealDataState(prev => ({
+          ...prev,
+          [punto]: {
+            ...prev[punto],
+            isAvailable: false,
+            sensorStatus: 'No hay datos disponibles en sensoringest'
+          }
+        }));
+      }
+    } catch {
+      setError(`Error al cargar datos de sensoringest para ${punto}`);
     }
   };
 
@@ -1008,8 +1109,8 @@ export const useRealtimeSensorData = ({
         setSimulationStatus(states);
         setSimulationState(simStates);
         setSimulationProgress(progresses);
-      } catch (error) {
-        console.error('Error loading simulation states:', error);
+      } catch {
+        // Error cargando estados de simulación
       }
     };
     
@@ -1047,17 +1148,6 @@ export const useRealtimeSensorData = ({
               if ('hasData' in responseObj) {
                 hasData = Boolean(responseObj.hasData);
               }
-              
-              // Si no encontramos en response principal, buscar en response.data
-              if (!fileExists && response.data && typeof response.data === 'object') {
-                const dataObj = response.data as unknown as Record<string, unknown>;
-                if ('exists' in dataObj) {
-                  fileExists = Boolean(dataObj.exists);
-                }
-                if ('hasData' in dataObj) {
-                  hasData = Boolean(dataObj.hasData);
-                }
-              }
             }
             
             const isAvailable = fileExists && hasData;
@@ -1078,8 +1168,7 @@ export const useRealtimeSensorData = ({
             // Determinar fuente de datos inicial
             initialDataSources[punto] = isAvailable ? 'historical' : 'simulated';
               
-          } catch (error) {
-            console.warn(`❌ [useRealtimeSensorData] No se pudo verificar disponibilidad de datos reales para ${punto}:`, error);
+          } catch {
             initialRealDataStates[punto] = {
               isAvailable: false,
               isMonitoring: false,
@@ -1092,9 +1181,8 @@ export const useRealtimeSensorData = ({
         
         setRealDataState(initialRealDataStates);
         setDataSource(initialDataSources);
-        
-      } catch (error) {
-        console.error('❌ [useRealtimeSensorData] Error initializing real data states:', error);
+      } catch {
+        // Error al inicializar estados
       }
     };
     
@@ -1107,15 +1195,12 @@ export const useRealtimeSensorData = ({
   useEffect(() => {
     const checkDataWhenConnected = async () => {
       if (isConnected && puntos.length > 0) {
-        
         try {
           for (const punto of puntos) {
-            
-            const isAvailable = await checkRealDataAvailability(punto);
-            console.log(`📊 [useRealtimeSensorData] ${punto}: Datos reales ${isAvailable ? 'DISPONIBLES' : 'NO DISPONIBLES'} tras conexión`);
+            await checkRealDataAvailability(punto);
           }
-        } catch (error) {
-          console.error('❌ [useRealtimeSensorData] Error verificando datos tras conexión:', error);
+        } catch {
+          // Error verificando datos
         }
       }
     };
@@ -1159,6 +1244,9 @@ export const useRealtimeSensorData = ({
     switchToSimulatedData,
     loadHistoricalData,
     loadFullStaticData,
+    
+    // Acciones para datos de sensoringest (nuevo endpoint)
+    loadSensorIngestData,
     
     // Utilidades
     clearData,

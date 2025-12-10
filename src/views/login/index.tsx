@@ -6,12 +6,15 @@ import { TextField, Button, Checkbox, FormGroup, FormControlLabel, Alert, Circul
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import { AuthService } from "../../services/login/auth.service";
+import { useAuth } from "@/hooks/useAuth";
+import type { LoginCredentials } from "@/types/login";
 
 export default function Login() {
   const router = useRouter();
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
   
   // Estados del formulario
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<LoginCredentials>({
     userName: '',
     password: ''
   });
@@ -21,11 +24,10 @@ export default function Login() {
 
   // Verificar si ya está autenticado al cargar el componente
   useEffect(() => {
-    if (AuthService.isAuthenticated()) {
-      // Si ya está autenticado, redirigir al home
-      router.push('/home');
+    if (!authLoading && isAuthenticated) {
+      router.replace('/home');
     }
-  }, [router]);
+  }, [authLoading, isAuthenticated, router]);
 
   // Manejadores de cambio de inputs
   const handleInputChange = (field: string) => (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -53,17 +55,13 @@ export default function Login() {
     setError('');
 
     try {
-      const response = await AuthService.login({
+      await AuthService.login({
         userName: formData.userName.trim(),
         password: formData.password
       });
 
-      if (response.success && response.data) {
-        // Login exitoso - redirigir al home para todos los usuarios
-        router.push('/home');
-      } else {
-        setError(response.message || 'Error al iniciar sesión');
-      }
+      // Login exitoso - redirigir al home para todos los usuarios
+      router.push('/home');
     } catch (error: unknown) {
       console.error('Login error:', error);
       if (error && typeof error === 'object' && 'response' in error) {

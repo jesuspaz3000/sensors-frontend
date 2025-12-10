@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Button, Card, CardContent, Typography, Box, Chip, Switch, FormControlLabel, Alert, LinearProgress, ButtonGroup, Tooltip, Snackbar, Badge } from '@mui/material';
-import { TrendingUp, PlayArrow, Stop, Pause, RestartAlt, Refresh, Cloud, CloudOff, Speed, Timeline, Computer, RadioButtonChecked, FiberManualRecord, Warning, Email, NotificationsActive } from '@mui/icons-material';
+import { Button, Card, CardContent, Typography, Box, Chip, Switch, FormControlLabel, Alert, Tooltip, Snackbar, Badge, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions } from '@mui/material';
+import { TrendingUp, PlayArrow, Pause, Refresh, Cloud, CloudOff, Speed, Timeline, Computer, RadioButtonChecked, FiberManualRecord, Warning, Email, NotificationsActive, DeleteForever } from '@mui/icons-material';
 import GraphicsComponent from '@/components/graphics';
 import DataSourceIndicator from '@/components/DataSourceIndicator';
 import DataSourceSummary from '@/components/DataSourceSummary';
@@ -12,31 +12,19 @@ import GraphicsSectionService, {
     SensorReading,
     SimulationState
 } from '@/services/airQuality/graphicsSection.service';
+import type { 
+    FileNotification, 
+    AlertSnackbarState, 
+    EmailNotification 
+} from '@/types/airQuality';
+import type { 
+    CriticalAlertNotification, 
+    EmailSentNotification 
+} from '@/types/signalr';
 import { useRealtimeSensorData } from '@/hooks/useRealtimeSensorData';
 import { useCriticalAlerts } from '@/hooks/useCriticalAlerts';
+import { SensorIngestService } from '@/services/sensorIngest';
 import { MultiPointStatusIndicator } from '@/components/RealtimeStatusIndicator';
-
-// Interfaces para las nuevas señales SignalR mejoradas
-// Interfaces para las nuevas señales de SignalR del backend mejorado
-interface CriticalValue {
-    Parameter: string;
-    Value: number;
-    Unit: string;
-    Threshold: number;
-}
-
-interface CriticalAlertSignal {
-    Punto: string;
-    Timestamp: string;
-    CriticalValues: CriticalValue[];
-}
-
-interface EmailSentSignal {
-    Punto: string;
-    UserEmail: string;
-    EmailSentTo?: string;
-    Timestamp: string;
-}
 
 export default function GraphicsSection() {
     const [selectedPoint, setSelectedPoint] = useState<string | null>(null);
@@ -47,11 +35,7 @@ export default function GraphicsSection() {
     const [dataMode, setDataMode] = useState<'static' | 'realtime'>('static');
     
     // Estado para notificaciones de cambios en archivos
-    const [fileNotifications, setFileNotifications] = useState<{ [key: string]: {
-        type: 'reset' | 'stopped' | 'active';
-        message: string;
-        timestamp: Date;
-    } }>({});
+    const [fileNotifications, setFileNotifications] = useState<{ [key: string]: FileNotification }>({});
 
     // Estado para controlar pausa de gráficas en tiempo real
     const [pausedGraphs, setPausedGraphs] = useState<{ [key: string]: boolean }>({});
@@ -62,13 +46,7 @@ export default function GraphicsSection() {
     const [staticDataStatus, setStaticDataStatus] = useState<{ [key: string]: 'real-time' | 'simulating' | 'unknown' }>({});
 
     // Estados para alertas críticas y notificaciones
-    const [alertSnackbar, setAlertSnackbar] = useState<{
-        open: boolean;
-        type: 'critical' | 'email' | 'reset';
-        message: string;
-        punto: string;
-        autoHide: boolean;
-    }>({
+    const [alertSnackbar, setAlertSnackbar] = useState<AlertSnackbarState>({
         open: false,
         type: 'critical',
         message: '',
@@ -79,71 +57,20 @@ export default function GraphicsSection() {
     const [showAlertsPanel, setShowAlertsPanel] = useState(false);
 
     // Estado para notificaciones de email
-    const [emailNotifications, setEmailNotifications] = useState<Array<{
-        id: string;
-        punto: string;
-        email: string;
-        timestamp: Date;
-        message: string;
-    }>>([]);
+    const [emailNotifications, setEmailNotifications] = useState<EmailNotification[]>([]);
 
-    // Hook para datos en tiempo real con SignalR
-    const {
-        realtimeData,
-        latestReadings,
-        simulationStatus,
-        simulationState,
-        simulationProgress,
-        connectionState,
-        isConnected,
-        // Estados de datos reales
-        realDataState,
-        dataSource,
-        // Acciones de conexión
-        connect,
-        disconnect,
-        // Acciones de simulación
-        startSimulation,
-        pauseSimulation,
-        resumeSimulation,
-        restartSimulation,
-        stopSimulation,
-        startRealTimeMonitoring,
-        switchToRealData,
-        switchToSimulatedData,
-        loadFullStaticData
-    } = useRealtimeSensorData({
-        puntos: availablePoints,
-        maxDataPoints: 500,
-        autoConnect: false,
-        // Callbacks para alertas críticas
-        onCriticalAlert: (alertData) => {
-            // Convertir al formato local
-            const criticalAlertSignal: CriticalAlertSignal = {
-                Punto: alertData.Punto,
-                Timestamp: alertData.Timestamp,
-                CriticalValues: alertData.CriticalValues.map(cv => ({
-                    Parameter: cv.Parameter,
-                    Value: cv.Value,
-                    Unit: cv.Unit,
-                    Threshold: cv.Threshold
-                }))
-            };
-            handleCriticalAlertReceived(criticalAlertSignal);
-        },
-        onEmailSent: (emailData) => {
-            // Convertir al formato local
-            const emailSentSignal: EmailSentSignal = {
-                Punto: emailData.Punto,
-                UserEmail: emailData.EmailSentTo,
-                EmailSentTo: emailData.EmailSentTo,
-                Timestamp: emailData.Timestamp
-            };
-            handleEmailSentReceived(emailSentSignal);
-        }
+    // Estado para el diálogo de confirmación de eliminación
+    const [deleteDialog, setDeleteDialog] = useState<{
+        open: boolean;
+        type: 'single' | 'all';
+        punto: string;
+    }>({
+        open: false,
+        type: 'single',
+        punto: ''
     });
 
-    // Hook para gestión de alertas críticas
+    // Hook para gestión de alertas críticas (debe estar antes de useRealtimeSensorData)
     const {
         activeAlerts,
         alertStatus,
@@ -164,11 +91,11 @@ export default function GraphicsSection() {
     // ========================
 
     // Función para manejar alertas críticas recibidas por SignalR
-    const handleCriticalAlertReceived = useCallback((alertData: CriticalAlertSignal) => {
+    const handleCriticalAlertReceived = useCallback((alertData: CriticalAlertNotification) => {
         
         // Mostrar notificación visual prominente
         const criticalParams = alertData.CriticalValues
-            ?.map((cv: CriticalValue) => `${cv.Parameter}: ${cv.Value} ${cv.Unit}`)
+            ?.map((cv) => `${cv.Parameter}: ${cv.Value} ${cv.Unit}`)
             .join(', ') || 'Valores críticos detectados';
             
         setAlertSnackbar({
@@ -197,13 +124,13 @@ export default function GraphicsSection() {
     }, [getAlertStatusForPoint]);
 
     // Función para manejar confirmaciones de email enviado
-    const handleEmailSentReceived = useCallback((emailData: EmailSentSignal) => {
+    const handleEmailSentReceived = useCallback((emailData: EmailSentNotification) => {
         
         // Agregar a la lista de notificaciones de email
-        const emailNotification = {
+        const emailNotification: EmailNotification = {
             id: Date.now().toString(),
             punto: emailData.Punto || 'Sistema',
-            email: emailData.UserEmail || emailData.EmailSentTo || 'usuario',
+            email: emailData.EmailSentTo || 'usuario',
             timestamp: new Date(emailData.Timestamp),
             message: `Email de alerta crítica enviado exitosamente`
         };
@@ -216,7 +143,7 @@ export default function GraphicsSection() {
             setAlertSnackbar({
                 open: true,
                 type: 'email',
-                message: `📧 ¡Email de alerta enviado exitosamente! Destinatario: ${emailData.UserEmail || emailData.EmailSentTo || 'usuario'}`,
+                message: `📧 ¡Email de alerta enviado exitosamente! Destinatario: ${emailData.EmailSentTo || 'usuario'}`,
                 punto: emailData.Punto || 'Sistema',
                 autoHide: false // Cambiar a false para que sea más visible
             });
@@ -231,6 +158,35 @@ export default function GraphicsSection() {
         }
         
     }, [getAlertStatusForPoint]);
+
+    // Hook para datos en tiempo real con SignalR
+    const {
+        realtimeData,
+        latestReadings,
+        simulationStatus,
+        simulationState,
+        simulationProgress,
+        connectionState,
+        isConnected,
+        // Estados de datos reales
+        realDataState,
+        dataSource,
+        // Acciones de conexión
+        connect,
+        disconnect,
+        // Acciones de tiempo real
+        startRealTimeMonitoring,
+        switchToRealData,
+        switchToSimulatedData,
+        loadSensorIngestData
+    } = useRealtimeSensorData({
+        puntos: availablePoints,
+        maxDataPoints: 500,
+        autoConnect: false,
+        // Callbacks para alertas críticas
+        onCriticalAlert: handleCriticalAlertReceived,
+        onEmailSent: handleEmailSentReceived
+    });
 
     // Los eventos de SignalR para alertas se manejan automáticamente dentro del hook useRealtimeSensorData
     // pero necesitamos conectar los manejadores locales con los eventos recibidos
@@ -283,17 +239,21 @@ export default function GraphicsSection() {
                     // Para puntos con datos reales disponibles
                     if (isPaused && frozenData[punto]) {
                         // Si está pausado, usar datos congelados
-                        mergedData[punto] = frozenData[punto];
+                        const frozen = frozenData[punto];
+                        mergedData[punto] = Array.isArray(frozen) ? frozen : [];
                         if (Math.random() < 0.05) { // Solo 5% de las veces para evitar spam
-                            console.log(`❄️ [${punto}] Usando datos congelados: ${frozenData[punto].length} registros`);
+                            console.log(`❄️ [${punto}] Usando datos congelados: ${mergedData[punto].length} registros`);
                         }
                     } else {
                         // Si no está pausado, usar datos en tiempo real
-                        mergedData[punto] = realtimeData[punto] || [];
+                        const rtData = realtimeData[punto];
+                        mergedData[punto] = Array.isArray(rtData) ? rtData : [];
                     }
                 } else {
                     // Para puntos sin datos reales, usar simulación o datos estáticos
-                    mergedData[punto] = realtimeData[punto] || staticSensorData[punto] || [];
+                    const rtData = realtimeData[punto];
+                    const staticData = staticSensorData[punto];
+                    mergedData[punto] = Array.isArray(rtData) ? rtData : (Array.isArray(staticData) ? staticData : []);
                 }
             });
             
@@ -348,31 +308,6 @@ export default function GraphicsSection() {
             isActive: simulationStatus[punto] || false,
             status: simulationState[punto] === SimulationState.RUNNING ? 'simulating' as const : 'real-time' as const
         };
-    };
-
-    // Función mejorada para control de simulación
-    const handleSimulationControl = async (punto: string, action: 'start' | 'pause' | 'resume' | 'restart' | 'stop') => {
-        try {
-            switch (action) {
-                case 'start':
-                    await startSimulation(punto);
-                    break;
-                case 'pause':
-                    await pauseSimulation(punto);
-                    break;
-                case 'resume':
-                    await resumeSimulation(punto);
-                    break;
-                case 'restart':
-                    await restartSimulation(punto);
-                    break;
-                case 'stop':
-                    await stopSimulation(punto);
-                    break;
-            }
-        } catch (error) {
-            console.error(`Error en acción ${action} para ${punto}:`, error);
-        }
     };
 
     // ========================
@@ -468,12 +403,72 @@ export default function GraphicsSection() {
         }
     };
 
-    const handleLoadFullStaticData = async (punto: string) => {
+
+    // Función para abrir el diálogo de confirmación para un punto específico
+    const handleClearHistory = (punto: string) => {
+        setDeleteDialog({
+            open: true,
+            type: 'single',
+            punto
+        });
+    };
+
+    // Función para abrir el diálogo de confirmación para todos los puntos
+    const handleClearAllHistory = () => {
+        setDeleteDialog({
+            open: true,
+            type: 'all',
+            punto: ''
+        });
+    };
+
+    // Función para cerrar el diálogo
+    const handleCloseDeleteDialog = () => {
+        setDeleteDialog(prev => ({ ...prev, open: false }));
+    };
+
+    // Función para confirmar la eliminación
+    const handleConfirmDelete = async () => {
+        const { type, punto } = deleteDialog;
+        handleCloseDeleteDialog();
+        
         try {
             setSwitchingMode(true);
-            await loadFullStaticData(punto);
+            
+            if (type === 'single') {
+                await SensorIngestService.clearHistory(punto);
+                setStaticSensorData(prev => ({ ...prev, [punto]: [] }));
+                setAlertSnackbar({
+                    open: true,
+                    type: 'reset',
+                    message: `Historial de ${punto} eliminado correctamente`,
+                    punto,
+                    autoHide: true
+                });
+            } else {
+                await SensorIngestService.clearAllHistory();
+                setStaticSensorData({});
+                setAlertSnackbar({
+                    open: true,
+                    type: 'reset',
+                    message: 'Historial de todos los puntos eliminado correctamente',
+                    punto: '',
+                    autoHide: true
+                });
+            }
+            
+            await refreshAllData();
         } catch (error) {
-            console.error(`❌ Error loading full static data for ${punto}:`, error);
+            console.error(`❌ Error clearing history:`, error);
+            setAlertSnackbar({
+                open: true,
+                type: 'critical',
+                message: type === 'single' 
+                    ? `Error al eliminar historial de ${punto}`
+                    : 'Error al eliminar historial de todos los puntos',
+                punto: type === 'single' ? punto : '',
+                autoHide: true
+            });
         } finally {
             setSwitchingMode(false);
         }
@@ -484,17 +479,23 @@ export default function GraphicsSection() {
         const loadInitialData = async () => {
             try {
 
-                // Obtener puntos disponibles
+                // Obtener puntos disponibles y ordenarlos
                 const points = await GraphicsSectionService.getAvailablePoints();
-                setAvailablePoints(points);
+                const sortedPoints = points.sort((a, b) => {
+                    // Extraer números de los nombres (ej: "Punto 1" -> 1)
+                    const numA = parseInt(a.match(/\d+/)?.[0] || '0', 10);
+                    const numB = parseInt(b.match(/\d+/)?.[0] || '0', 10);
+                    return numA - numB;
+                });
+                setAvailablePoints(sortedPoints);
 
-                if (points.length === 0) {
+                if (sortedPoints.length === 0) {
                     console.warn('⚠️ No se encontraron puntos disponibles');
                     return;
                 }
 
                 // Cargar datos estáticos iniciales
-                await loadStaticData(points);
+                await loadStaticData(sortedPoints);
 
             } catch (error) {
                 console.error('❌ Error loading initial data:', error);
@@ -665,6 +666,16 @@ export default function GraphicsSection() {
                 // Cambiar modo después de conectar exitosamente
                 setDataMode(newMode);
 
+                // Cargar datos históricos del endpoint sensoringest para cada punto
+                // Esto proporciona datos iniciales mientras se reciben datos en tiempo real
+                for (const punto of availablePoints) {
+                    try {
+                        await loadSensorIngestData(punto, 50);
+                    } catch (err) {
+                        console.warn(`⚠️ No se pudieron cargar datos de sensoringest para ${punto}:`, err);
+                        // Continuar con los demás puntos aunque falle uno
+                    }
+                }
                 
             } else {
                 
@@ -701,31 +712,6 @@ export default function GraphicsSection() {
         }
     };
 
-    // Alternar simulación (función mejorada)
-    const toggleSimulation = async (punto: string) => {
-        try {
-            if (dataMode === 'realtime') {
-                const currentState = simulationState[punto] || SimulationState.STOPPED;
-
-                if (currentState === SimulationState.STOPPED) {
-                    // Iniciar simulación
-                    await handleSimulationControl(punto, 'start');
-                } else if (currentState === SimulationState.RUNNING) {
-                    // Detener simulación
-                    await handleSimulationControl(punto, 'stop');
-                } else if (currentState === SimulationState.PAUSED) {
-                    // Reanudar simulación
-                    await handleSimulationControl(punto, 'resume');
-                }
-            } else {
-                // Modo estático: NO PERMITIR simulación, solo cambiar a tiempo real
-                alert('Para simulación gradual (datos uno por uno), cambia a modo "Tiempo Real" usando el interruptor de arriba.');
-            }
-        } catch (error) {
-            console.error(`Error toggling simulation for ${punto}:`, error);
-        }
-    };
-
     // Refrescar todos los datos
     const refreshAllData = async () => {
         setLoading(true);
@@ -759,7 +745,14 @@ export default function GraphicsSection() {
     };
 
     const formatTime = (timestamp: string) => {
-        return new Date(timestamp).toLocaleTimeString('es-ES', {
+        // El backend guarda timestamps en UTC (ej: "2025-12-09T22:13:15")
+        // Necesitamos convertirlos a hora local del usuario
+        // Agregamos 'Z' para indicar que es UTC y JavaScript lo convertirá a local
+        
+        const utcTimestamp = timestamp.endsWith('Z') ? timestamp : timestamp + 'Z';
+        const date = new Date(utcTimestamp);
+        
+        return date.toLocaleTimeString('es-ES', {
             hour: '2-digit',
             minute: '2-digit',
             second: '2-digit'
@@ -767,7 +760,9 @@ export default function GraphicsSection() {
     };
 
     const getChartData = (punto: string, metric: 'temperatura' | 'cO3' | 'pM2_5') => {
-        const data = currentSensorData[punto] || [];
+        const rawData = currentSensorData[punto];
+        // Asegurar que data sea siempre un array válido
+        const data = Array.isArray(rawData) ? rawData : [];
         return {
             xAxis: data.map(item => formatTime(item.timestamp)),
             series: data.map(item => item[metric])
@@ -906,275 +901,87 @@ export default function GraphicsSection() {
                         </div>
 
                         <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
-                            {dataMode === 'realtime' ? (
+                            {dataMode === 'realtime' && realDataState[selectedPoint]?.isAvailable && (
                                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: '200px' }}>
-                                    {realDataState[selectedPoint]?.isAvailable ? (
-                                        // CONTROLES PARA TIEMPO REAL
-                                        <>
-                                            <Typography
-                                                variant="caption"
+                                    {/* CONTROLES PARA TIEMPO REAL */}
+                                    <Typography
+                                        variant="caption"
+                                        sx={{
+                                            color: 'rgba(255,255,255,0.8)',
+                                            fontSize: '0.7rem',
+                                            fontWeight: 'bold',
+                                            textAlign: 'center',
+                                            mb: 1
+                                        }}
+                                    >
+                                        📡 MONITOREO EN TIEMPO REAL
+                                    </Typography>
+                                    
+                                    <Box sx={{ display: 'flex', flexDirection: 'row', gap: 2, alignItems: 'center' }}>
+                                        {/* Indicador de estado en vivo - no es un botón */}
+                                        <Chip
+                                            size="medium"
+                                            label={!pausedGraphs[selectedPoint] ? "🔴 EN VIVO" : "⚫ PAUSADO"}
+                                            color={!pausedGraphs[selectedPoint] ? "error" : "default"}
+                                            icon={!pausedGraphs[selectedPoint] ? <FiberManualRecord /> : <RadioButtonChecked />}
+                                            variant="filled"
+                                            sx={{
+                                                animation: !pausedGraphs[selectedPoint] ? 'pulse 2s infinite' : 'none',
+                                                '@keyframes pulse': {
+                                                    '0%': { opacity: 1 },
+                                                    '50%': { opacity: 0.7 },
+                                                    '100%': { opacity: 1 }
+                                                },
+                                                backgroundColor: !pausedGraphs[selectedPoint] ? '#d32f2f' : '#424242',
+                                                color: 'white',
+                                                fontWeight: 'bold',
+                                                fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                                                minWidth: '120px'
+                                            }}
+                                        />
+                                        
+                                        {/* Botón de Pausar/Reanudar */}
+                                        <Tooltip title={!pausedGraphs[selectedPoint] ? "Pausar gráfica (los datos siguen llegando en segundo plano)" : "Reanudar gráfica desde los últimos datos"}>
+                                            <Button
+                                                onClick={() => handleRealTimeControl(selectedPoint, pausedGraphs[selectedPoint] ? 'start' : 'pause')}
+                                                startIcon={pausedGraphs[selectedPoint] ? <PlayArrow /> : <Pause />}
+                                                variant="outlined"
+                                                color={pausedGraphs[selectedPoint] ? "success" : "warning"}
                                                 sx={{
-                                                    color: 'rgba(255,255,255,0.8)',
-                                                    fontSize: '0.7rem',
-                                                    fontWeight: 'bold',
-                                                    textAlign: 'center',
-                                                    mb: 1
-                                                }}
-                                            >
-                                                📡 MONITOREO EN TIEMPO REAL
-                                            </Typography>
-                                            
-                                            <Box sx={{ display: 'flex', flexDirection: 'row', gap: 2, alignItems: 'center' }}>
-                                                {/* Indicador de estado en vivo - no es un botón */}
-                                                <Chip
-                                                    size="medium"
-                                                    label={!pausedGraphs[selectedPoint] ? "🔴 EN VIVO" : "⚫ PAUSADO"}
-                                                    color={!pausedGraphs[selectedPoint] ? "error" : "default"}
-                                                    icon={!pausedGraphs[selectedPoint] ? <FiberManualRecord /> : <RadioButtonChecked />}
-                                                    variant="filled"
-                                                    sx={{
-                                                        animation: !pausedGraphs[selectedPoint] ? 'pulse 2s infinite' : 'none',
-                                                        '@keyframes pulse': {
-                                                            '0%': { opacity: 1 },
-                                                            '50%': { opacity: 0.7 },
-                                                            '100%': { opacity: 1 }
-                                                        },
-                                                        backgroundColor: !pausedGraphs[selectedPoint] ? '#d32f2f' : '#424242',
-                                                        color: 'white',
-                                                        fontWeight: 'bold',
-                                                        fontSize: { xs: '0.75rem', sm: '0.875rem' },
-                                                        minWidth: '120px'
-                                                    }}
-                                                />
-                                                
-                                                {/* Botón de Pausar/Reanudar */}
-                                                <Tooltip title={!pausedGraphs[selectedPoint] ? "Pausar gráfica (los datos siguen llegando en segundo plano)" : "Reanudar gráfica desde los últimos datos"}>
-                                                    <Button
-                                                        onClick={() => handleRealTimeControl(selectedPoint, pausedGraphs[selectedPoint] ? 'start' : 'pause')}
-                                                        startIcon={pausedGraphs[selectedPoint] ? <PlayArrow /> : <Pause />}
-                                                        variant="outlined"
-                                                        color={pausedGraphs[selectedPoint] ? "success" : "warning"}
-                                                        sx={{
-                                                            color: 'white',
-                                                            borderColor: pausedGraphs[selectedPoint] ? '#4caf50' : '#ff9800',
-                                                            fontSize: { xs: '0.75rem', sm: '0.875rem' },
-                                                            px: { xs: 1.5, sm: 2 },
-                                                            py: { xs: 0.5, sm: 1 },
-                                                            minWidth: '120px',
-                                                            '&:hover': {
-                                                                borderColor: pausedGraphs[selectedPoint] ? '#66bb6a' : '#ffb74d',
-                                                                backgroundColor: pausedGraphs[selectedPoint] ? 'rgba(76, 175, 80, 0.1)' : 'rgba(255, 152, 0, 0.1)'
-                                                            }
-                                                        }}
-                                                    >
-                                                        {pausedGraphs[selectedPoint] ? 'Reanudar' : 'Pausar'}
-                                                    </Button>
-                                                </Tooltip>
-                                            </Box>
-
-                                            {/* Mensaje informativo */}
-                                            <Typography
-                                                variant="caption"
-                                                sx={{
-                                                    color: 'rgba(255,255,255,0.6)',
-                                                    fontSize: '0.65rem',
-                                                    textAlign: 'center',
-                                                    mt: 1,
-                                                    fontStyle: 'italic'
-                                                }}
-                                            >
-                                                {!pausedGraphs[selectedPoint] 
-                                                    ? "Gráfica actualizándose en tiempo real" 
-                                                    : "Gráfica pausada - datos acumulándose en segundo plano"
-                                                }
-                                            </Typography>
-                                        </>
-                                    ) : (
-                                        // CONTROLES PARA SIMULACIÓN
-                                        <>
-                                            <Typography
-                                                variant="caption"
-                                                sx={{
-                                                    color: 'rgba(255,255,255,0.8)',
-                                                    fontSize: '0.7rem',
-                                                    fontWeight: 'bold',
-                                                    textAlign: 'center',
-                                                    mb: 1
-                                                }}
-                                            >
-                                                🎮 SIMULACIÓN GRADUAL
-                                            </Typography>
-                                            
-                                            <ButtonGroup variant="outlined"
-                                                sx={{
-                                                    display: 'flex',
-                                                    flexDirection: 'row',
-                                                    gap: 2,
-                                                    '& .MuiButton-root': {
-                                                        color: 'white',
-                                                        borderColor: 'rgba(255,255,255,0.5)',
-                                                        fontSize: { xs: '0.75rem', sm: '0.875rem' },
-                                                        px: { xs: 1, sm: 2 },
-                                                        py: { xs: 0.5, sm: 1 },
-                                                        '&:hover': {
-                                                            borderColor: 'white',
-                                                            backgroundColor: 'rgba(255,255,255,0.1)'
-                                                        }
+                                                    color: 'white',
+                                                    borderColor: pausedGraphs[selectedPoint] ? '#4caf50' : '#ff9800',
+                                                    fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                                                    px: { xs: 1.5, sm: 2 },
+                                                    py: { xs: 0.5, sm: 1 },
+                                                    minWidth: '120px',
+                                                    '&:hover': {
+                                                        borderColor: pausedGraphs[selectedPoint] ? '#66bb6a' : '#ffb74d',
+                                                        backgroundColor: pausedGraphs[selectedPoint] ? 'rgba(76, 175, 80, 0.1)' : 'rgba(255, 152, 0, 0.1)'
                                                     }
-                                                }}>
-                                                {getEnhancedStatus(selectedPoint).state === SimulationState.STOPPED ? (
-                                                    <Tooltip title="Iniciar simulación gradual - los datos aparecerán uno por uno">
-                                                        <Button
-                                                            onClick={() => handleSimulationControl(selectedPoint, 'start')}
-                                                            startIcon={<PlayArrow />}
-                                                        >
-                                                            Simular Gradual
-                                                        </Button>
-                                                    </Tooltip>
-                                                ) : getEnhancedStatus(selectedPoint).state === SimulationState.RUNNING ? (
-                                                    <>
-                                                        <Tooltip title="Pausar simulación gradual">
-                                                            <Button
-                                                                onClick={() => handleSimulationControl(selectedPoint, 'pause')}
-                                                                startIcon={<Pause />}
-                                                            >
-                                                                Pausar
-                                                            </Button>
-                                                        </Tooltip>
-                                                        <Tooltip title="Detener simulación gradual - mantener datos acumulados">
-                                                            <Button
-                                                                onClick={() => handleSimulationControl(selectedPoint, 'stop')}
-                                                                startIcon={<Stop />}
-                                                            >
-                                                                Detener
-                                                            </Button>
-                                                        </Tooltip>
-                                                    </>
-                                                ) : getEnhancedStatus(selectedPoint).state === SimulationState.PAUSED ? (
-                                                    <>
-                                                        <Tooltip title="Reanudar simulación gradual">
-                                                            <Button
-                                                                onClick={() => handleSimulationControl(selectedPoint, 'resume')}
-                                                                startIcon={<PlayArrow />}
-                                                            >
-                                                                Reanudar
-                                                            </Button>
-                                                        </Tooltip>
-                                                        <Tooltip title="Reiniciar simulación desde el principio">
-                                                            <Button
-                                                                onClick={() => handleSimulationControl(selectedPoint, 'restart')}
-                                                                startIcon={<RestartAlt />}
-                                                            >
-                                                                Reiniciar
-                                                            </Button>
-                                                        </Tooltip>
-                                                        <Tooltip title="Detener simulación gradual - mantener datos acumulados">
-                                                            <Button
-                                                                onClick={() => handleSimulationControl(selectedPoint, 'stop')}
-                                                                startIcon={<Stop />}
-                                                            >
-                                                                Detener
-                                                            </Button>
-                                                        </Tooltip>
-                                                    </>
-                                                ) : null}
-                                            </ButtonGroup>
-                                        </>
-                                    )}
+                                                }}
+                                            >
+                                                {pausedGraphs[selectedPoint] ? 'Reanudar' : 'Pausar'}
+                                            </Button>
+                                        </Tooltip>
+                                    </Box>
 
-                                    {/* Botones adicionales para cargar datos completos y limpiar - solo para simulación */}
-                                    {!realDataState[selectedPoint]?.isAvailable && getEnhancedStatus(selectedPoint).state === SimulationState.STOPPED && (
-                                        <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
-                                            <Tooltip title="Cargar todos los datos estáticos disponibles en la gráfica">
-                                                <Button
-                                                    variant="outlined"
-                                                    onClick={() => handleLoadFullStaticData(selectedPoint)}
-                                                    startIcon={<TrendingUp />}
-                                                    disabled={switchingMode}
-                                                    size="small"
-                                                    sx={{
-                                                        color: 'white',
-                                                        borderColor: 'rgba(255,255,255,0.5)',
-                                                        fontSize: { xs: '0.7rem', sm: '0.8rem' },
-                                                        px: { xs: 1, sm: 1.5 },
-                                                        py: { xs: 0.3, sm: 0.5 },
-                                                        '&:hover': {
-                                                            borderColor: 'white',
-                                                            backgroundColor: 'rgba(255,255,255,0.1)'
-                                                        }
-                                                    }}
-                                                >
-                                                    Ver Datos Completos
-                                                </Button>
-                                            </Tooltip>
-                                            <Tooltip title="Limpiar gráfica para empezar simulación desde cero">
-                                                <Button
-                                                    variant="outlined"
-                                                    onClick={() => {
-                                                        // Limpiar datos en tiempo real para este punto - función por implementar
-                                                        console.log(`🧹 Solicitud de limpieza de datos para ${selectedPoint}`);
-                                                    }}
-                                                    startIcon={<CloudOff />}
-                                                    disabled={switchingMode}
-                                                    size="small"
-                                                    sx={{
-                                                        color: 'rgba(255,255,255,0.8)',
-                                                        borderColor: 'rgba(255,255,255,0.4)',
-                                                        fontSize: { xs: '0.7rem', sm: '0.8rem' },
-                                                        px: { xs: 1, sm: 1.5 },
-                                                        py: { xs: 0.3, sm: 0.5 },
-                                                        '&:hover': {
-                                                            borderColor: 'rgba(255,255,255,0.6)',
-                                                            backgroundColor: 'rgba(255,255,255,0.05)'
-                                                        }
-                                                    }}
-                                                >
-                                                    Limpiar Gráfica
-                                                </Button>
-                                            </Tooltip>
-                                        </Box>
-                                    )}
-
-                                    {/* Barra de progreso para simulación activa */}
-                                    {(getEnhancedStatus(selectedPoint).state === SimulationState.RUNNING ||
-                                        getEnhancedStatus(selectedPoint).state === SimulationState.PAUSED) && (
-                                            <Box sx={{ mt: 1 }}>
-                                                <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.8)', mb: 0.5, display: 'block' }}>
-                                                    Progreso: {Math.round(getEnhancedStatus(selectedPoint).progress)}%
-                                                </Typography>
-                                                <LinearProgress
-                                                    variant="determinate"
-                                                    value={getEnhancedStatus(selectedPoint).progress}
-                                                    sx={{
-                                                        height: 6,
-                                                        borderRadius: 3,
-                                                        backgroundColor: 'rgba(255,255,255,0.2)',
-                                                        '& .MuiLinearProgress-bar': {
-                                                            backgroundColor: getEnhancedStatus(selectedPoint).state === SimulationState.PAUSED
-                                                                ? '#ff9800'
-                                                                : '#4caf50'
-                                                        }
-                                                    }}
-                                                />
-                                            </Box>
-                                        )}
+                                    {/* Mensaje informativo */}
+                                    <Typography
+                                        variant="caption"
+                                        sx={{
+                                            color: 'rgba(255,255,255,0.6)',
+                                            fontSize: '0.65rem',
+                                            textAlign: 'center',
+                                            mt: 1,
+                                            fontStyle: 'italic'
+                                        }}
+                                    >
+                                        {!pausedGraphs[selectedPoint] 
+                                            ? "Gráfica actualizándose en tiempo real" 
+                                            : "Gráfica pausada - datos acumulándose en segundo plano"
+                                        }
+                                    </Typography>
                                 </Box>
-                            ) : (
-                                <Button
-                                    variant="outlined"
-                                    onClick={() => toggleSimulation(selectedPoint)}
-                                    startIcon={<PlayArrow />}
-                                    disabled={true}
-                                    sx={{
-                                        color: 'rgba(255,255,255,0.5)',
-                                        borderColor: 'rgba(255,255,255,0.3)',
-                                        fontSize: { xs: '0.875rem', sm: '1rem' },
-                                        px: { xs: 2, sm: 3 },
-                                        py: { xs: 1, sm: 1.5 }
-                                    }}
-                                >
-                                    Simulación Gradual (solo en Tiempo Real)
-                                </Button>
                             )}
 
                             <Button
@@ -1194,6 +1001,28 @@ export default function GraphicsSection() {
                             >
                                 Volver al Resumen
                             </Button>
+
+                            <Tooltip title={`Eliminar todo el historial de ${selectedPoint}`}>
+                                <Button
+                                    variant="outlined"
+                                    onClick={() => selectedPoint && handleClearHistory(selectedPoint)}
+                                    disabled={switchingMode || !selectedPoint}
+                                    startIcon={<DeleteForever />}
+                                    sx={{
+                                        color: '#ff6b6b',
+                                        borderColor: 'rgba(255,107,107,0.5)',
+                                        fontSize: { xs: '0.875rem', sm: '1rem' },
+                                        px: { xs: 2, sm: 3 },
+                                        py: { xs: 1, sm: 1.5 },
+                                        '&:hover': {
+                                            borderColor: '#ff6b6b',
+                                            backgroundColor: 'rgba(255,107,107,0.1)'
+                                        }
+                                    }}
+                                >
+                                    Limpiar Historial
+                                </Button>
+                            </Tooltip>
                         </div>
                     </div>
 
@@ -1316,7 +1145,7 @@ export default function GraphicsSection() {
                                     <GraphicsComponent
                                         title="CO2"
                                         unit="ppm"
-                                        color="#4ecdc4"
+                                        color="#e040fb"
                                         label="CO2"
                                         data={co2Data}
                                         criticalThreshold={criticalThresholds.cO3}
@@ -1473,6 +1302,77 @@ export default function GraphicsSection() {
                         )
                     }
                 />
+
+                {/* Diálogo de confirmación para eliminar historial - Vista de gráficas */}
+                <Dialog
+                    open={deleteDialog.open}
+                    onClose={handleCloseDeleteDialog}
+                    PaperProps={{
+                        sx: {
+                            backgroundColor: 'rgba(30, 41, 59, 0.95)',
+                            backdropFilter: 'blur(10px)',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            borderRadius: 3,
+                            minWidth: { xs: '90%', sm: 400 }
+                        }
+                    }}
+                >
+                    <DialogTitle sx={{ 
+                        color: '#ff6b6b', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        gap: 1,
+                        borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
+                    }}>
+                        <DeleteForever />
+                        Confirmar Eliminación
+                    </DialogTitle>
+                    <DialogContent sx={{ mt: 2 }}>
+                        <DialogContentText sx={{ color: 'rgba(255, 255, 255, 0.9)' }}>
+                            {deleteDialog.type === 'single' 
+                                ? `¿Estás seguro de que deseas eliminar todo el historial de ${deleteDialog.punto}?`
+                                : '¿Estás seguro de que deseas eliminar el historial de TODOS los puntos?'
+                            }
+                        </DialogContentText>
+                        <DialogContentText sx={{ color: 'rgba(255, 107, 107, 0.9)', mt: 2, fontWeight: 'bold' }}>
+                            ⚠️ Esta acción no se puede deshacer.
+                        </DialogContentText>
+                    </DialogContent>
+                    <DialogActions sx={{ 
+                        p: 2, 
+                        borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+                        gap: 1
+                    }}>
+                        <Button 
+                            onClick={handleCloseDeleteDialog}
+                            variant="outlined"
+                            sx={{
+                                color: 'rgba(255, 255, 255, 0.7)',
+                                borderColor: 'rgba(255, 255, 255, 0.3)',
+                                '&:hover': {
+                                    borderColor: 'rgba(255, 255, 255, 0.5)',
+                                    backgroundColor: 'rgba(255, 255, 255, 0.05)'
+                                }
+                            }}
+                        >
+                            Cancelar
+                        </Button>
+                        <Button 
+                            onClick={handleConfirmDelete}
+                            variant="contained"
+                            color="error"
+                            startIcon={<DeleteForever />}
+                            sx={{
+                                backgroundColor: '#d32f2f',
+                                '&:hover': {
+                                    backgroundColor: '#b71c1c'
+                                }
+                            }}
+                        >
+                            Eliminar
+                        </Button>
+                    </DialogActions>
+                </Dialog>
             </div>
         );
     }
@@ -1566,6 +1466,24 @@ export default function GraphicsSection() {
                         >
                             Actualizar Todo
                         </Button>
+                        <Tooltip title="Eliminar el historial de todos los puntos">
+                            <Button
+                                variant="outlined"
+                                onClick={handleClearAllHistory}
+                                startIcon={<DeleteForever />}
+                                disabled={loading || switchingMode}
+                                sx={{
+                                    color: '#ff6b6b',
+                                    borderColor: 'rgba(255,107,107,0.5)',
+                                    '&:hover': {
+                                        borderColor: '#ff6b6b',
+                                        backgroundColor: 'rgba(255,107,107,0.1)'
+                                    }
+                                }}
+                            >
+                                Limpiar Todo
+                            </Button>
+                        </Tooltip>
                     </Box>
 
                     {/* Mensaje explicativo */}
@@ -2110,6 +2028,77 @@ export default function GraphicsSection() {
                         )
                     }
                 />
+
+                {/* Diálogo de confirmación para eliminar historial */}
+                <Dialog
+                    open={deleteDialog.open}
+                    onClose={handleCloseDeleteDialog}
+                    PaperProps={{
+                        sx: {
+                            backgroundColor: 'rgba(30, 41, 59, 0.95)',
+                            backdropFilter: 'blur(10px)',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            borderRadius: 3,
+                            minWidth: { xs: '90%', sm: 400 }
+                        }
+                    }}
+                >
+                    <DialogTitle sx={{ 
+                        color: '#ff6b6b', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        gap: 1,
+                        borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
+                    }}>
+                        <DeleteForever />
+                        Confirmar Eliminación
+                    </DialogTitle>
+                    <DialogContent sx={{ mt: 2 }}>
+                        <DialogContentText sx={{ color: 'rgba(255, 255, 255, 0.9)' }}>
+                            {deleteDialog.type === 'single' 
+                                ? `¿Estás seguro de que deseas eliminar todo el historial de ${deleteDialog.punto}?`
+                                : '¿Estás seguro de que deseas eliminar el historial de TODOS los puntos?'
+                            }
+                        </DialogContentText>
+                        <DialogContentText sx={{ color: 'rgba(255, 107, 107, 0.9)', mt: 2, fontWeight: 'bold' }}>
+                            ⚠️ Esta acción no se puede deshacer.
+                        </DialogContentText>
+                    </DialogContent>
+                    <DialogActions sx={{ 
+                        p: 2, 
+                        borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+                        gap: 1
+                    }}>
+                        <Button 
+                            onClick={handleCloseDeleteDialog}
+                            variant="outlined"
+                            sx={{
+                                color: 'rgba(255, 255, 255, 0.7)',
+                                borderColor: 'rgba(255, 255, 255, 0.3)',
+                                '&:hover': {
+                                    borderColor: 'rgba(255, 255, 255, 0.5)',
+                                    backgroundColor: 'rgba(255, 255, 255, 0.05)'
+                                }
+                            }}
+                        >
+                            Cancelar
+                        </Button>
+                        <Button 
+                            onClick={handleConfirmDelete}
+                            variant="contained"
+                            color="error"
+                            startIcon={<DeleteForever />}
+                            sx={{
+                                backgroundColor: '#d32f2f',
+                                '&:hover': {
+                                    backgroundColor: '#b71c1c'
+                                }
+                            }}
+                        >
+                            Eliminar
+                        </Button>
+                    </DialogActions>
+                </Dialog>
             </div>
         </div>
     );

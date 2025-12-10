@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import { Card, CardContent, Typography, Box } from '@mui/material';
 import { LineChart } from '@mui/x-charts/LineChart';
 
@@ -25,6 +26,19 @@ export default function GraphicsComponent({
     data,
     criticalThreshold
 }: GraphicsComponentProps) {
+    // Memorizar los datos para evitar re-renders innecesarios
+    const chartData = useMemo(() => ({
+        xAxis: data.xAxis,
+        series: data.series
+    }), [data.xAxis, data.series]);
+    
+    const thresholdData = useMemo(() => 
+        criticalThreshold !== undefined 
+            ? Array(chartData.xAxis.length).fill(criticalThreshold)
+            : [],
+        [criticalThreshold, chartData.xAxis.length]
+    );
+
     return (
         <Card sx={{ 
             backgroundColor: 'rgba(255,255,255,0.15)', 
@@ -56,7 +70,7 @@ export default function GraphicsComponent({
                 }}>
                     <LineChart
                         xAxis={[{
-                            data: data.xAxis,
+                            data: chartData.xAxis,
                             scaleType: 'point',
                             label: 'Tiempo',
                             labelStyle: { fill: 'white', fontSize: 12 },
@@ -69,17 +83,20 @@ export default function GraphicsComponent({
                         }]}
                         series={[
                             {
-                                data: data.series,
+                                data: chartData.series,
                                 color: color,
-                                label: label
+                                label: label,
+                                showMark: false // Ocultar puntos para transición más suave
                             },
-                            ...(criticalThreshold !== undefined ? [{
-                                data: Array(data.xAxis.length).fill(criticalThreshold),
+                            ...(thresholdData.length > 0 ? [{
+                                data: thresholdData,
                                 color: '#ff4444',
                                 label: `⚠️ Umbral Crítico (${criticalThreshold} ${unit})`,
-                                curve: 'linear' as const
+                                curve: 'linear' as const,
+                                showMark: false
                             }] : [])
                         ]}
+                        skipAnimation={true}
                         sx={{
                             width: '100%',
                             height: '100%',

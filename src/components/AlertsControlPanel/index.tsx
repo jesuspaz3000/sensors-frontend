@@ -333,7 +333,7 @@ export const AlertsControlPanel: React.FC<AlertsControlPanelProps> = ({
                                 <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.7)', display: 'block' }}>
                                   Valores críticos:
                                 </Typography>
-                                {alert.CriticalValues.map((cv, cvIndex) => (
+                                {alert.CriticalValues.map((cv: { Parameter: string; Value: number; Threshold: number; Unit: string }, cvIndex: number) => (
                                   <Chip
                                     key={cvIndex}
                                     size="small"

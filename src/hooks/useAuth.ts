@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { AuthService, User } from '../services/login/auth.service';
+import { AuthService } from '../services/login/auth.service';
+import type { User } from '../types/login';
 import { validateAndRefreshToken, REVALIDATION_CONFIG } from '../services/api.service';
 
 interface UseAuthReturn {
@@ -23,14 +24,6 @@ export const useAuth = (): UseAuthReturn => {
 
   useEffect(() => {
     setIsMounted(true);
-    // Log de configuración al montar (solo en development)
-    if (REVALIDATION_CONFIG.DEBUG_REVALIDATION) {
-      console.log('useAuth initialized with config:', {
-        visibilityRevalidation: REVALIDATION_CONFIG.ENABLE_VISIBILITY_REVALIDATION,
-        inactivityThreshold: `${REVALIDATION_CONFIG.LONG_INACTIVITY_THRESHOLD / 60000} minutes`,
-        minInterval: `${REVALIDATION_CONFIG.MIN_REVALIDATION_INTERVAL / 60000} minutes`
-      });
-    }
   }, []);
 
   useEffect(() => {
@@ -38,7 +31,6 @@ export const useAuth = (): UseAuthReturn => {
 
     const checkAuth = async () => {
       try {
-        // Primero verificar si hay tokens básicos
         const hasTokens = AuthService.isAuthenticated();
         
         if (!hasTokens) {
@@ -48,24 +40,29 @@ export const useAuth = (): UseAuthReturn => {
           return;
         }
 
-        // Si hay tokens, validarlos con el servidor (modo silencioso para carga inicial)
-        console.log('Validating tokens with server...');
-        const isValidToken = await validateAndRefreshToken(true);
+        const isValidToken = await validateAndRefreshToken();
         
         if (isValidToken) {
-          // Token válido, obtener datos del usuario
           const currentUser = AuthService.getCurrentUser();
           setUser(currentUser);
           setIsAuthenticated(true);
-          console.log('Authentication successful');
         } else {
-          // Token inválido y no se pudo refrescar
+          // Tokens inválidos, limpiar localStorage
+          if (typeof window !== 'undefined') {
+            localStorage.removeItem('accessToken');
+            localStorage.removeItem('refreshToken');
+            localStorage.removeItem('user');
+          }
           setUser(null);
           setIsAuthenticated(false);
-          console.log('Authentication failed - invalid token');
         }
-      } catch (error) {
-        console.error('Error checking authentication:', error);
+      } catch {
+        // Error en validación, limpiar localStorage
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('accessToken');
+          localStorage.removeItem('refreshToken');
+          localStorage.removeItem('user');
+        }
         setIsAuthenticated(false);
         setUser(null);
       } finally {
@@ -92,15 +89,11 @@ export const useAuth = (): UseAuthReturn => {
   };
 
   const revalidate = async () => {
-    // Solo revalidar si no está ya cargando para evitar múltiples llamadas simultáneas
-    if (isLoading) {
-      console.log('Skipping revalidation - already loading');
-      return;
-    }
+    if (isLoading) return;
     
     setIsLoading(true);
     try {
-      const isValidToken = await validateAndRefreshToken(true);
+      const isValidToken = await validateAndRefreshToken();
       
       if (isValidToken) {
         const currentUser = AuthService.getCurrentUser();
@@ -110,8 +103,7 @@ export const useAuth = (): UseAuthReturn => {
         setUser(null);
         setIsAuthenticated(false);
       }
-    } catch (error) {
-      console.error('Error during revalidation:', error);
+    } catch {
       setUser(null);
       setIsAuthenticated(false);
     } finally {

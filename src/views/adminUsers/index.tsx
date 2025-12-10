@@ -23,30 +23,15 @@ import PersonIcon from '@mui/icons-material/Person';
 import WarningIcon from '@mui/icons-material/Warning';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import DeleteIcon from '@mui/icons-material/Delete';
-// Imports temporalmente comentados hasta implementar CRUD completo
 import CreateUserDialog from './create';
 import EditUserDialog from './edit';
 import UsersTable, { getChipColor } from '@/components/table';
-import AdminUsersService, { User } from '@/services/adminUsers/adminUsers.service';
-
-interface UserData {
-    id: string;
-    nombre: string;
-    usuario: string;
-    email: string;
-    rol: string;
-    emailConfirmed?: boolean;
-    createdAt?: string;
-    updatedAt?: string;
-}
-
-interface CreateUserData {
-    nombre: string;
-    usuario: string;
-    email: string;
-    password: string;
-    rol: string;
-}
+import AdminUsersService from '@/services/adminUsers/adminUsers.service';
+import type { 
+    User, 
+    UserData, 
+    CreateUserFormData 
+} from '@/types/adminUsers';
 
 export default function AdminUsers() {
     const [users, setUsers] = useState<UserData[]>([]);
@@ -58,7 +43,6 @@ export default function AdminUsers() {
         pageSize: 10,
     });
     const [totalUsers, setTotalUsers] = useState(0);
-    // Estados temporalmente comentados hasta implementar CRUD completo
     const [createDialogOpen, setCreateDialogOpen] = useState(false);
     const [editDialogOpen, setEditDialogOpen] = useState(false);
     const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -121,21 +105,18 @@ export default function AdminUsers() {
         console.log('handleEditUser called with id:', id);
         try {
             setError(null);
-            const response = await AdminUsersService.getUserById(id);
-            
-            // Verificar si los datos están en response.data o directamente en response
-            const userData = response.data || response;
+            const userData = await AdminUsersService.getUserById(id);
             
             // Type guard para verificar si es un objeto User
             if (userData && typeof userData === 'object' && 'id' in userData && 'name' in userData) {
                 console.log('User data received, opening edit dialog...');
                 // Mapear los datos del API a la estructura esperada por el diálogo
                 const mappedUserData: UserData = {
-                    id: (userData as User).id,
-                    nombre: (userData as User).name,
-                    usuario: (userData as User).userName,
-                    email: (userData as User).email,
-                    rol: (userData as User).roles.includes('Admin') ? 'Administrador' : 'Usuario'
+                    id: userData.id,
+                    nombre: userData.name,
+                    usuario: userData.userName,
+                    email: userData.email,
+                    rol: userData.roles.includes('Admin') ? 'Administrador' : 'Usuario'
                 };
                 
                 setSelectedUser(mappedUserData);
@@ -166,7 +147,7 @@ export default function AdminUsers() {
         }
     };
 
-    const handleSaveNewUser = async (userData: CreateUserData) => {
+    const handleSaveNewUser = async (userData: CreateUserFormData) => {
         try {
             setError(null);
             setSuccessMessage(null);

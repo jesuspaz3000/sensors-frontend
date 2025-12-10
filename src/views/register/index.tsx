@@ -5,7 +5,9 @@ import Link from "next/link";
 import { TextField, Button, Alert, CircularProgress } from "@mui/material";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { RegisterService, RegisterData } from "../../services/register/register.service";
+import { RegisterService } from "../../services/register/register.service";
+import type { RegisterData } from "@/types/register";
+import { validateRegisterData } from "@/utils/register";
 import { AuthService } from "../../services/login/auth.service";
 
 export default function Register() {
@@ -50,7 +52,7 @@ export default function Register() {
 
     try {
       // Validar datos localmente primero
-      const validation = RegisterService.validateRegisterData(formData);
+      const validation = validateRegisterData(formData);
       if (!validation.isValid) {
         setError(validation.errors[0].message);
         setLoading(false);
@@ -62,15 +64,11 @@ export default function Register() {
 
       console.log('Register response:', response);
 
-      if (response.success) {
-        setSuccess('¡Registro exitoso! Redirigiendo al login...');
-        // Redirigir al login después de 2 segundos
-        setTimeout(() => {
-          router.push('/login');
-        }, 2000);
-      } else {
-        setError(response.message || 'Error al registrar usuario');
-      }
+      setSuccess(response.message || '¡Registro exitoso! Redirigiendo al login...');
+      // Redirigir al login después de 2 segundos
+      setTimeout(() => {
+        router.push('/login');
+      }, 2000);
     } catch (error: unknown) {
       console.error('Register error:', error);
       

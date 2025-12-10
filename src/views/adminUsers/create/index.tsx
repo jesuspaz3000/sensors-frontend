@@ -20,23 +20,16 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import SaveIcon from '@mui/icons-material/Save';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
+import type { CreateUserFormData } from '@/types/adminUsers';
 
 interface CreateUserDialogProps {
     open: boolean;
     onClose: () => void;
-    onSave: (userData: UserData) => void;
-}
-
-interface UserData {
-    nombre: string;
-    usuario: string;
-    email: string;
-    password: string;
-    rol: string;
+    onSave: (userData: CreateUserFormData) => void;
 }
 
 export default function CreateUserDialog({ open, onClose, onSave }: CreateUserDialogProps) {
-    const [formData, setFormData] = useState<UserData>({
+    const [formData, setFormData] = useState<CreateUserFormData>({
         nombre: '',
         usuario: '',
         email: '',
@@ -44,7 +37,7 @@ export default function CreateUserDialog({ open, onClose, onSave }: CreateUserDi
         rol: 'Usuario'
     });
 
-    const [errors, setErrors] = useState<Partial<UserData>>({});
+    const [errors, setErrors] = useState<Partial<CreateUserFormData>>({});
 
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const { name, value } = e.target;
@@ -53,7 +46,7 @@ export default function CreateUserDialog({ open, onClose, onSave }: CreateUserDi
             [name]: value
         }));
         // Limpiar error del campo cuando el usuario escriba
-        if (errors[name as keyof UserData]) {
+        if (errors[name as keyof CreateUserFormData]) {
             setErrors(prev => ({
                 ...prev,
                 [name]: ''
@@ -69,7 +62,7 @@ export default function CreateUserDialog({ open, onClose, onSave }: CreateUserDi
     };
 
     const validateForm = (): boolean => {
-        const newErrors: Partial<UserData> = {};
+        const newErrors: Partial<CreateUserFormData> = {};
 
         if (!formData.nombre.trim()) {
             newErrors.nombre = 'El nombre es requerido';

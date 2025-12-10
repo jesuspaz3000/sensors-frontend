@@ -10,9 +10,9 @@ import EmailIcon from '@mui/icons-material/Email';
 import LockIcon from '@mui/icons-material/Lock';
 import SaveIcon from '@mui/icons-material/Save';
 import CancelIcon from '@mui/icons-material/Cancel';
-import { ProfileService, UpdateProfileData } from '../../services/profile/profile.service';
-import { AuthService } from '../../services/login/auth.service';
-import { debugApiConfig } from '../../services/api.service';
+import { ProfileService } from '../../services/profile/profile.service';
+import type { UpdateProfileData } from '@/types/profile';
+import { isPasswordChangeAttempt } from '@/utils/profile';
 
 export default function Profile() {
     const [formData, setFormData] = useState({
@@ -41,27 +41,25 @@ export default function Profile() {
         try {
             setLoadingData(true);
             
-            // Obtener datos del usuario desde localStorage (inmediato)
-            const response = await ProfileService.getProfile();
-            if (response.success && response.data) {
+            // Intentar obtener datos del usuario desde localStorage primero
+            try {
+                const user = await ProfileService.getProfile();
                 setFormData(prev => ({
                     ...prev,
-                    name: response.data?.name || '',
-                    userName: response.data?.userName || '',
-                    email: response.data?.email || ''
+                    name: user.name || '',
+                    userName: user.userName || '',
+                    email: user.email || ''
                 }));
-            } else {
+            } catch {
                 // Si no hay datos en localStorage, intentar desde la API
                 try {
-                    const apiResponse = await ProfileService.getProfileFromAPI();
-                    if (apiResponse.success && apiResponse.data) {
-                        setFormData(prev => ({
-                            ...prev,
-                            name: apiResponse.data?.name || '',
-                            userName: apiResponse.data?.userName || '',
-                            email: apiResponse.data?.email || ''
-                        }));
-                    }
+                    const user = await ProfileService.getProfileFromAPI();
+                    setFormData(prev => ({
+                        ...prev,
+                        name: user.name || '',
+                        userName: user.userName || '',
+                        email: user.email || ''
+                    }));
                 } catch (apiError) {
                     console.error('Error loading from API:', apiError);
                     setError('Error al cargar los datos del usuario');
@@ -96,9 +94,6 @@ export default function Profile() {
     const handleSubmit = async (e: FormEvent) => {
         e.preventDefault();
         
-        // Debug de configuración y autenticación
-        await debugApiConfig();
-        
         setLoading(true);
         setError('');
         setSuccess('');
@@ -114,7 +109,7 @@ export default function Profile() {
             };
 
             // Determinar si se está intentando cambiar la contraseña
-            const isChangingPassword = ProfileService.isPasswordChangeAttempt({
+            const isChangingPassword = isPasswordChangeAttempt({
                 name: formData.name,
                 userName: formData.userName,
                 email: formData.email,
@@ -133,29 +128,36 @@ export default function Profile() {
 
             const response = await ProfileService.updateProfile(updateData);
 
-            if (response.success) {
-                setSuccess('¡Perfil actualizado exitosamente!');
-                
-                // Actualizar datos del usuario en localStorage si se actualizó
-                if (response.data?.user) {
-                    AuthService.saveUser(response.data.user);
+            setSuccess(response.message || '¡Perfil actualizado exitosamente!');
+            
+            // Actualizar datos del usuario localmente
+            if (response.user) {
+                // Guardar usuario actualizado en localStorage
+                if (typeof window !== 'undefined') {
+                    localStorage.setItem('user', JSON.stringify(response.user));
                 }
                 
-                // Limpiar campos de contraseña
+                // Actualizar el formulario con los datos nuevos
                 setFormData(prev => ({
                     ...prev,
-                    currentPassword: '',
-                    newPassword: '',
-                    confirmNewPassword: ''
+                    name: response.user.name,
+                    userName: response.user.userName,
+                    email: response.user.email
                 }));
-
-                // Opcional: Limpiar mensaje de éxito después de un tiempo
-                setTimeout(() => {
-                    setSuccess('');
-                }, 3000);
-            } else {
-                setError(response.message || 'Error al actualizar el perfil');
             }
+            
+            // Limpiar campos de contraseña
+            setFormData(prev => ({
+                ...prev,
+                currentPassword: '',
+                newPassword: '',
+                confirmNewPassword: ''
+            }));
+
+            // Opcional: Limpiar mensaje de éxito después de un tiempo
+            setTimeout(() => {
+                setSuccess('');
+            }, 3000);
         } catch (error: unknown) {
             console.error('Profile update error:', error);
             

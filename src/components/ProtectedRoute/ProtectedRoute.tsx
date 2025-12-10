@@ -22,22 +22,28 @@ function ProtectedRoute({ children, adminOnly = false }: ProtectedRouteProps) {
   // Evitar problemas de hidratación esperando a que el componente se monte
   useEffect(() => {
     setIsMounted(true);
-    // Solo establecer el tiempo inicial al montar (esto es la carga inicial de la vista)
     lastValidationTime.current = Date.now();
-    console.log('ProtectedRoute mounted - initial validation time set');
   }, []);
 
   useEffect(() => {
     if (!isMounted || isLoading) return;
 
     if (!isAuthenticated) {
-      router.push('/login');
+      // Limpiar tokens inválidos del localStorage antes de redirigir
+      if (typeof window !== 'undefined') {
+        const hasTokens = localStorage.getItem('accessToken') || localStorage.getItem('refreshToken');
+        if (hasTokens) {
+          localStorage.removeItem('accessToken');
+          localStorage.removeItem('refreshToken');
+          localStorage.removeItem('user');
+        }
+      }
+      router.replace('/login');
       return;
     }
 
     if (adminOnly && !isAdmin) {
-      // Si la ruta requiere admin y no lo es, redirigir al home
-      router.push('/home');
+      router.replace('/home');
       return;
     }
   }, [isAuthenticated, isLoading, isAdmin, adminOnly, router, isMounted]);
@@ -50,9 +56,6 @@ function ProtectedRoute({ children, adminOnly = false }: ProtectedRouteProps) {
     
     // Si la revalidación por visibilidad está deshabilitada, no hacer nada
     if (!REVALIDATION_CONFIG.ENABLE_VISIBILITY_REVALIDATION) {
-      if (REVALIDATION_CONFIG.DEBUG_REVALIDATION) {
-        console.log('ProtectedRoute: Visibility revalidation is disabled');
-      }
       return;
     }
     

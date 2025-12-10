@@ -6,10 +6,10 @@ import {
   TestAlertResponse,
   SensorReading
 } from '../services/airQuality/graphicsSection.service';
-import { 
+import type { 
   CriticalAlertNotification, 
   EmailSentNotification 
-} from '../services/signalr/signalr.service';
+} from '../types/signalr';
 
 // Estado interno del hook
 export interface CriticalAlertsState {
@@ -70,16 +70,11 @@ export const useCriticalAlerts = ({
   // ========================
 
   const handleCriticalAlert = useCallback((alertData: CriticalAlertNotification) => {
-    console.log('🚨 [useCriticalAlerts] Nueva alerta crítica recibida:', alertData);
-    
-    // Agregar la nueva alerta al historial
     setActiveAlerts(prev => {
       const newAlerts = [alertData, ...prev];
-      // Mantener solo las alertas más recientes
       return newAlerts.slice(0, maxAlertHistory);
     });
     
-    // Actualizar el estado de alertas para el punto específico
     setAlertStatus(prev => ({
       ...prev,
       [alertData.Punto]: {
@@ -90,25 +85,13 @@ export const useCriticalAlerts = ({
         Status: 'alert-sent'
       } as AlertStatus
     }));
-    
-    // Mostrar notificación visual (esto puede ser personalizado por el componente padre)
-    console.log(`🚨 ALERTA CRÍTICA en ${alertData.Punto}: ${alertData.Message}`);
-    
   }, [maxAlertHistory]);
 
   const handleEmailSent = useCallback((emailData: EmailSentNotification) => {
-    console.log('📧 [useCriticalAlerts] Notificación de email recibida:', emailData);
-    
-    // Agregar la notificación de email al historial
     setEmailNotifications(prev => {
       const newEmails = [emailData, ...prev];
-      // Mantener solo las notificaciones más recientes
       return newEmails.slice(0, maxEmailHistory);
     });
-    
-    // Mostrar notificación de confirmación
-    console.log(`📧 Email de alerta enviado a ${emailData.EmailSentTo} para ${emailData.Punto}`);
-    
   }, [maxEmailHistory]);
 
   // ========================
@@ -120,10 +103,8 @@ export const useCriticalAlerts = ({
       setIsLoading(true);
       setError(null);
       
-      const response = await GraphicsSectionService.resetAlertStatus(punto);
-      console.log(`✅ [useCriticalAlerts] Alerta reseteada para ${punto}:`, response);
+      await GraphicsSectionService.resetAlertStatus(punto);
       
-      // Actualizar estado local
       setAlertStatus(prev => ({
         ...prev,
         [punto]: {
@@ -133,11 +114,8 @@ export const useCriticalAlerts = ({
         } as AlertStatus
       }));
       
-      // Remover alertas activas para este punto
       setActiveAlerts(prev => prev.filter(alert => alert.Punto !== punto));
-      
     } catch (error) {
-      console.error(`❌ [useCriticalAlerts] Error reseteando alerta para ${punto}:`, error);
       setError(error instanceof Error ? error.message : 'Error reseteando alerta');
     } finally {
       setIsLoading(false);
@@ -150,12 +128,8 @@ export const useCriticalAlerts = ({
       setError(null);
       
       const response = await GraphicsSectionService.testCriticalAlert(testReading);
-      console.log('🧪 [useCriticalAlerts] Resultado del test de alerta:', response);
-      
-      return response.data || null;
-      
+      return response || null;
     } catch (error) {
-      console.error('❌ [useCriticalAlerts] Error en test de alerta:', error);
       setError(error instanceof Error ? error.message : 'Error en test de alerta');
       return null;
     } finally {
@@ -166,12 +140,9 @@ export const useCriticalAlerts = ({
   const refreshMonitoringStatus = useCallback(async (): Promise<void> => {
     try {
       setError(null);
-      
       const response = await GraphicsSectionService.getMonitoringStatus();
-      setMonitoringStatus(response.data || null);
-      
+      setMonitoringStatus(response || null);
     } catch (error) {
-      console.error('❌ [useCriticalAlerts] Error obteniendo estado de monitoreo:', error);
       setError(error instanceof Error ? error.message : 'Error obteniendo estado de monitoreo');
     }
   }, []);
@@ -179,10 +150,9 @@ export const useCriticalAlerts = ({
   const refreshActiveAlerts = useCallback(async (): Promise<void> => {
     try {
       setError(null);
-      
       const response = await GraphicsSectionService.getActiveAlerts();
-      // Convertir ActiveAlert[] a CriticalAlertNotification[] para compatibilidad
-      const alerts = response.data?.map(alert => ({
+      
+      const alerts: CriticalAlertNotification[] = response?.map((alert: { Punto: string; Timestamp: string; EmailSent: boolean; EmailSentTo: string; Message: string; Severity: 1 | 2 | 3; CriticalValues: Array<{ Parameter: string; Value: number; Threshold: number; Unit: string }> }) => ({
         Type: 'critical-alert' as const,
         Punto: alert.Punto,
         Timestamp: alert.Timestamp,
@@ -191,10 +161,10 @@ export const useCriticalAlerts = ({
         UserNotified: '',
         UserDisplayName: '',
         CriticalValues: alert.CriticalValues,
-        Reading: {} as SensorReading, // Se puede mejorar si el backend envía más datos
+        Reading: {} as SensorReading,
         Message: alert.Message,
         Severity: alert.Severity,
-        ThresholdBreaches: alert.CriticalValues.map(cv => ({
+        ThresholdBreaches: alert.CriticalValues.map((cv: { Parameter: string; Value: number; Threshold: number; Unit: string }) => ({
           Parameter: cv.Parameter,
           Value: cv.Value,
           Threshold: cv.Threshold,
@@ -204,9 +174,7 @@ export const useCriticalAlerts = ({
       })) || [];
       
       setActiveAlerts(alerts);
-      
     } catch (error) {
-      console.error('❌ [useCriticalAlerts] Error obteniendo alertas activas:', error);
       setError(error instanceof Error ? error.message : 'Error obteniendo alertas activas');
     }
   }, []);
@@ -214,17 +182,15 @@ export const useCriticalAlerts = ({
   const getAlertStatusForPoint = useCallback(async (punto: string): Promise<void> => {
     try {
       setError(null);
-      
       const response = await GraphicsSectionService.getAlertStatus(punto);
-      if (response.data) {
+      
+      if (response) {
         setAlertStatus(prev => ({
           ...prev,
-          [punto]: response.data!
+          [punto]: response
         }));
       }
-      
     } catch (error) {
-      console.error(`❌ [useCriticalAlerts] Error obteniendo estado de alerta para ${punto}:`, error);
       setError(error instanceof Error ? error.message : `Error obteniendo estado de alerta para ${punto}`);
     }
   }, []);
@@ -270,7 +236,6 @@ export const useCriticalAlerts = ({
 
   // Cargar datos iniciales
   useEffect(() => {
-    console.log('🚨 [useCriticalAlerts] Inicializando hook de alertas críticas...');
     refreshMonitoringStatus();
     refreshActiveAlerts();
   }, [refreshMonitoringStatus, refreshActiveAlerts]);

@@ -20,20 +20,13 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import SaveIcon from '@mui/icons-material/Save';
 import EditIcon from '@mui/icons-material/Edit';
+import type { UserData } from '@/types/adminUsers';
 
 interface EditUserDialogProps {
     open: boolean;
     onClose: () => void;
     onSave: (userData: UserData) => void;
     userData: UserData | null;
-}
-
-interface UserData {
-    id: string;
-    nombre: string;
-    usuario: string;
-    email: string;
-    rol: string;
 }
 
 export default function EditUserDialog({ open, onClose, onSave, userData }: EditUserDialogProps) {
